@@ -11,7 +11,7 @@ import os
 
 @MainActor
 final class MenuBarIconCoordinator: MediaKeyIconFlashing {
-    private let deviceVolumeMonitor: DeviceVolumeMonitor
+    private let deviceVolumeMonitor: any DeviceVolumeProviding
     private let deviceProvider: any AudioDeviceProviding
     private let settings: SettingsManager
     private let logger = Logger(subsystem: "com.finetuneapp.FineTune", category: "MenuBarIconCoordinator")
@@ -23,7 +23,7 @@ final class MenuBarIconCoordinator: MediaKeyIconFlashing {
     private var started = false
 
     init(
-        deviceVolumeMonitor: DeviceVolumeMonitor,
+        deviceVolumeMonitor: any DeviceVolumeProviding,
         deviceProvider: any AudioDeviceProviding,
         settings: SettingsManager
     ) {
@@ -50,10 +50,11 @@ final class MenuBarIconCoordinator: MediaKeyIconFlashing {
         cachedButton = nil
     }
 
-    /// Transient device-icon flash. Applies to every style; fires on media keys and device changes.
+    /// Transient device-icon flash for single-icon styles; fires on media keys and device changes.
     /// If the same symbol is already flashing, extends the timer rather than restarting the fade —
     /// prevents mid-fade pops when device-change and media-key triggers coincide.
     func flashDevice() {
+        guard settings.appSettings.menuBarIconStyle != .device else { return }
         let symbol = currentDeviceSymbol()
         let alreadyShowingSame = (flashActiveSymbol == symbol)
         flashActiveSymbol = symbol
@@ -74,19 +75,35 @@ final class MenuBarIconCoordinator: MediaKeyIconFlashing {
 
     // MARK: - State
 
-    private func computeState() -> MenuBarIconState {
-        if let symbol = flashActiveSymbol {
-            return .deviceFlash(symbol: symbol)
-        }
+    func baselineState(fallbackVolume: Float = 0) -> MenuBarIconState {
+        let style = settings.appSettings.menuBarIconStyle
         let id = deviceVolumeMonitor.defaultDeviceID
-        let volume = deviceVolumeMonitor.volumes[id] ?? 0
-        let muted = deviceVolumeMonitor.muteStates[id] ?? false
+        if style == .device {
+            return .device(
+                output: MenuBarDeviceIconResolver.resolveActiveSymbol(
+                    id: id,
+                    overrideSymbol: deviceVolumeMonitor.defaultDeviceUID.flatMap { settings.getDeviceIconOverride(for: $0) },
+                    fallback: MenuBarDeviceIconResolver.fallbackSymbol,
+                    suggestedSymbol: { $0.suggestedIconSymbol() }
+                ),
+                input: MenuBarDeviceIconResolver.resolveActiveSymbol(
+                    id: deviceVolumeMonitor.defaultInputDeviceID,
+                    overrideSymbol: deviceVolumeMonitor.defaultInputDeviceUID.flatMap { settings.getDeviceIconOverride(for: $0) },
+                    fallback: "mic",
+                    suggestedSymbol: { $0.suggestedInputIconSymbol() }
+                )
+            )
+        }
         return MenuBarIconState.baseline(
-            style: settings.appSettings.menuBarIconStyle,
-            volume: volume,
-            muted: muted,
-            deviceSymbol: currentDeviceSymbol()
+            style: style,
+            volume: deviceVolumeMonitor.volumes[id] ?? fallbackVolume,
+            muted: deviceVolumeMonitor.muteStates[id] ?? false
         )
+    }
+
+    private func deviceName(for id: AudioDeviceID, in devices: [AudioDevice]) -> String {
+        guard id.isValid else { return "Unavailable" }
+        return devices.first(where: { $0.id == id })?.name ?? (try? id.readDeviceName()) ?? "Unavailable"
     }
 
     private func currentDeviceSymbol() -> String {
@@ -107,8 +124,21 @@ final class MenuBarIconCoordinator: MediaKeyIconFlashing {
 
     private func apply() {
         guard let button = resolveButton() else { return }
-        let state = computeState()
-        guard let image = state.image.nsImage() else { return }
+        let showsDevicePair = settings.appSettings.menuBarIconStyle == .device
+        let state = if !showsDevicePair, let symbol = flashActiveSymbol {
+            MenuBarIconState.deviceFlash(symbol: symbol)
+        } else {
+            baselineState()
+        }
+        let description: String? = if showsDevicePair {
+            "Output: \(deviceName(for: deviceVolumeMonitor.defaultDeviceID, in: deviceProvider.outputDevices))\n"
+                + "Microphone: \(deviceName(for: deviceVolumeMonitor.defaultInputDeviceID, in: deviceProvider.inputDevices))"
+        } else {
+            nil
+        }
+        guard let image = state.image.nsImage(accessibilityDescription: description ?? "FineTune") else { return }
+        button.toolTip = description
+        button.setAccessibilityHelp(description)
         addFadeTransition(to: button)
         button.image = image
     }
@@ -130,6 +160,9 @@ final class MenuBarIconCoordinator: MediaKeyIconFlashing {
     private func scheduleApplyTracking() {
         withObservationTracking {
             let id = deviceVolumeMonitor.defaultDeviceID
+            _ = deviceVolumeMonitor.defaultDeviceUID
+            _ = deviceVolumeMonitor.defaultInputDeviceID
+            _ = deviceVolumeMonitor.defaultInputDeviceUID
             _ = deviceVolumeMonitor.volumes[id]
             _ = deviceVolumeMonitor.muteStates[id]
             _ = settings.appSettings.menuBarIconStyle
@@ -138,6 +171,7 @@ final class MenuBarIconCoordinator: MediaKeyIconFlashing {
             // Deliberate dependency so the device-style icon refreshes when the user picks a new symbol; explicit because observation granularity is per stored property.
             _ = settings.deviceIconOverrides
             _ = deviceProvider.outputDevices
+            _ = deviceProvider.inputDevices
         } onChange: { [weak self] in
             // onChange fires in willSet — the tracked properties are still at their
             // pre-change values inside this closure. Re-register synchronously so the

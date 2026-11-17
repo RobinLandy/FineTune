@@ -13,6 +13,8 @@ enum MenuBarIconStyle: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var displayName: String { self == .device ? "Output and Microphone" : rawValue }
+
     /// The icon name - either asset catalog name or SF Symbol
     var iconName: String {
         switch self {

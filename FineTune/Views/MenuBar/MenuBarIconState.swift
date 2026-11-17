@@ -8,6 +8,7 @@ import Foundation
 nonisolated enum MenuBarIconImage: Equatable {
     case systemSymbol(String)
     case asset(String)
+    case devicePair(output: String, input: String)
 }
 
 nonisolated enum VolumeBucket: Equatable {
@@ -41,7 +42,7 @@ nonisolated enum VolumeBucket: Equatable {
 nonisolated enum MenuBarIconState: Equatable {
     case speakerVolume(VolumeBucket)
     case speakerMuted
-    case device(symbol: String)
+    case device(output: String, input: String)
     case staticBaseline(MenuBarIconImage)
     case deviceFlash(symbol: String)
 
@@ -49,7 +50,7 @@ nonisolated enum MenuBarIconState: Equatable {
         switch self {
         case .speakerVolume(let bucket): return .systemSymbol(bucket.symbolName)
         case .speakerMuted:              return .systemSymbol("speaker.slash.fill")
-        case .device(let symbol):        return .systemSymbol(symbol)
+        case .device(let output, let input): return .devicePair(output: output, input: input)
         case .staticBaseline(let image): return image
         case .deviceFlash(let symbol):   return .systemSymbol(symbol)
         }
@@ -63,14 +64,15 @@ extension MenuBarIconState {
         style: MenuBarIconStyle,
         volume: Float,
         muted: Bool,
-        deviceSymbol: String = MenuBarIconStyle.device.iconName
+        deviceSymbol: String = MenuBarIconStyle.device.iconName,
+        inputSymbol: String = "mic"
     ) -> MenuBarIconState {
         switch style {
         case .speaker:
             if muted { return .speakerMuted }
             return .speakerVolume(.bucket(for: volume))
         case .device:
-            return .device(symbol: deviceSymbol)
+            return .device(output: deviceSymbol, input: inputSymbol)
         case .default:
             return .staticBaseline(.asset("MenuBarIcon"))
         case .waveform:

@@ -14,7 +14,7 @@ struct MenuBarIconImageSizeTests {
     private var reachableImages: [MenuBarIconImage] {
         var images: [MenuBarIconImage] = [MenuBarIconState.speakerMuted.image]
         images += [VolumeBucket.zero, .low, .mid, .high].map { .systemSymbol($0.symbolName) }
-        images += MenuBarIconStyle.allCases.map {
+        images += MenuBarIconStyle.allCases.filter { $0 != .device }.map {
             MenuBarIconState.baseline(style: $0, volume: 0.5, muted: false).image
         }
         images += DeviceIconCatalog.categories.flatMap(\.entries).map { .systemSymbol($0.symbol) }
@@ -25,6 +25,23 @@ struct MenuBarIconImageSizeTests {
             "tv", "speaker.wave.2", "hifispeaker",
         ].map { .systemSymbol($0) }
         return images
+    }
+
+    @Test("Device pairs keep a fixed width and retain template rendering when either symbol changes")
+    func devicePairsShareOneSize() throws {
+        let single = try #require(MenuBarIconImage.systemSymbol("mic").nsImage()).size
+        let images: [MenuBarIconImage] = [
+            .devicePair(output: "airpodspro", input: "mic.fill"),
+            .devicePair(output: "airpodspro", input: "web.camera.fill"),
+            .devicePair(output: "hifispeaker", input: "web.camera.fill"),
+            .devicePair(output: "missing.output.symbol", input: "missing.input.symbol"),
+        ]
+        for image in images {
+            let rendered = try #require(image.nsImage(accessibilityDescription: "Output and microphone"))
+            #expect(rendered.size == NSSize(width: 2 * single.width, height: single.height))
+            #expect(rendered.isTemplate)
+            #expect(rendered.accessibilityDescription == "Output and microphone")
+        }
     }
 
     @Test("every reachable icon renders at one shared size")

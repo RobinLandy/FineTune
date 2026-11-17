@@ -162,7 +162,7 @@ struct FineTuneApp: App {
         _feedbackPlayer = State(initialValue: feedbackPlayer)
 
         let coordinator = MenuBarIconCoordinator(
-            deviceVolumeMonitor: engine.deviceVolumeMonitor as! DeviceVolumeMonitor,
+            deviceVolumeMonitor: engine.deviceVolumeMonitor,
             deviceProvider: engine.deviceMonitor,
             settings: settings
         )
@@ -175,22 +175,9 @@ struct FineTuneApp: App {
 
         // Render the scene's first frame with the user's chosen style instead of a generic
         // placeholder, so non-speaker styles don't briefly flash a speaker icon at launch.
-        let launchVolumeMonitor = engine.deviceVolumeMonitor
-        let launchID = launchVolumeMonitor.defaultDeviceID
-        let launchState = MenuBarIconState.baseline(
-            style: settings.appSettings.menuBarIconStyle,
-            volume: launchVolumeMonitor.volumes[launchID] ?? 1.0,
-            muted: launchVolumeMonitor.muteStates[launchID] ?? false,
-            deviceSymbol: MenuBarDeviceIconResolver.resolveSymbol(
-                priorityOrder: settings.devicePriorityOrder,
-                outputDevices: engine.deviceMonitor.outputDevices,
-                defaultDeviceID: launchID,
-                overrideForUID: { settings.getDeviceIconOverride(for: $0) }
-            )
-        )
         // The fallback must go through the shared canvas too, or the status
         // item launches at natural symbol width and jumps on the first apply().
-        launchIconImage = launchState.image.nsImage()
+        launchIconImage = coordinator.baselineState(fallbackVolume: 1.0).image.nsImage()
             ?? MenuBarIconImage.systemSymbol("speaker.wave.2").nsImage()!
 
         // Start Accessibility polling immediately so `isTrustedCached` is live

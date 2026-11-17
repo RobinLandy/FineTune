@@ -8,6 +8,19 @@ struct MenuBarDeviceIconResolver {
     // so it stays in sync with the rest of the app rather than a private literal.
     static let fallbackSymbol = TransportType.unknown.defaultIconSymbol
 
+    static func resolveActiveSymbol(
+        id: AudioDeviceID,
+        overrideSymbol: String?,
+        fallback: String,
+        suggestedSymbol: (AudioDeviceID) -> String
+    ) -> String {
+        guard id.isValid else { return fallback }
+        if let overrideSymbol, NSImage(systemSymbolName: overrideSymbol, accessibilityDescription: nil) != nil {
+            return overrideSymbol
+        }
+        return suggestedSymbol(id)
+    }
+
     /// An override symbol that fails to resolve (hand-edited settings.json,
     /// symbol removed in a future macOS) falls back to the derived symbol —
     /// a nil NSImage downstream would freeze the status item on its last image.

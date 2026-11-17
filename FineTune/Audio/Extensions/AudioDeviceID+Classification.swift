@@ -173,7 +173,10 @@ extension AudioDeviceID {
     func suggestedInputIconSymbol() -> String {
         let name = (try? readDeviceName()) ?? ""
         let transport = readTransportType()
+        return Self.inputIconSymbol(forName: name, transport: transport)
+    }
 
+    static func inputIconSymbol(forName name: String, transport: TransportType) -> String {
         // iPhone (Continuity Camera)
         if name.contains("iPhone") { return "iphone" }
 
@@ -194,6 +197,13 @@ extension AudioDeviceID {
         // Display mic
         if name.contains("Studio Display") { return "display" }
         if name.contains("Pro Display XDR") { return "display" }
+
+        if name.localizedCaseInsensitiveContains("camera") || name.localizedCaseInsensitiveContains("insta360 link") {
+            return "web.camera.fill"
+        }
+        if name.localizedCaseInsensitiveContains("wireless mic") {
+            return "mic.fill"
+        }
 
         // Transport-based fallbacks
         switch transport {

@@ -71,7 +71,7 @@ struct GeneralTab: View {
         SettingsSection("Menu Bar") {
             SettingsRow(
                 "Icon Style",
-                description: "How FineTune appears in your menu bar"
+                description: "The headphones and microphone option shows your active output and input."
             ) {
                 IconStyleSegmentedControl(selection: $settings.appSettings.menuBarIconStyle)
             }

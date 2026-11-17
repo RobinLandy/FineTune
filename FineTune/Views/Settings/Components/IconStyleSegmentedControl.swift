@@ -31,7 +31,13 @@ private struct IconOption: View {
     var body: some View {
         Button(action: onSelect) {
             Group {
-                if style.isSystemSymbol {
+                if style == .device {
+                    HStack(spacing: 4) {
+                        Image(systemName: style.iconName)
+                        Image(systemName: "mic")
+                    }
+                    .font(.system(size: 14))
+                } else if style.isSystemSymbol {
                     Image(systemName: style.iconName)
                         .font(.system(size: 14))
                 } else {
@@ -42,7 +48,7 @@ private struct IconOption: View {
                 }
             }
             .foregroundStyle(isSelected ? DesignTokens.Colors.accentPrimary : DesignTokens.Colors.textSecondary)
-            .frame(width: 30, height: 30)
+            .frame(width: style == .device ? 46 : 30, height: 30)
             .contentShape(Rectangle())
             .background {
                 RoundedRectangle(cornerRadius: 6)
@@ -54,7 +60,8 @@ private struct IconOption: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(style.rawValue)
+        .accessibilityLabel(style.displayName)
+        .help(style.displayName)
     }
 }
 
