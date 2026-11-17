@@ -388,7 +388,7 @@ final class AudioEngine {
         deviceMonitor.onInputDeviceConnected = { [weak self] deviceUID, deviceName in
             self?.logger.info("Input device connected: \(deviceName) (\(deviceUID))")
             self?.settingsManager.ensureInputDeviceInPriority(deviceUID)
-            self?.handleInputDeviceConnected(deviceUID, name: deviceName)
+            self?.handleInputDeviceConnected(deviceUID)
         }
 
         deviceVolumeMonitor.onDefaultDeviceChanged = { [weak self] newDefaultUID in
@@ -2082,32 +2082,28 @@ final class AudioEngine {
         // Restore the locked device — any change outside FineTune's UI is either
         // macOS auto-switch or System Settings, and the lock should hold either way.
         // Users change the lock via FineTune's UI (setLockedInputDevice).
-        guard let lockedUID = settingsManager.lockedInputDeviceUID else { return }
-        if newDefaultInputUID != lockedUID {
-            restoreLockedInputDevice()
-        }
+        restoreLockedInputDevice()
     }
 
-    /// Restores the locked input device, or falls back to built-in mic if unavailable.
+    /// Restores the preferred input when available, then tries the last fallback.
     private func restoreLockedInputDevice() {
         // A fresh install has no saved lock. Capture the user's current system input,
         // just as we do when the user enables the lock in Settings.
         if settingsManager.lockedInputDeviceUID == nil, settingsManager.preferredInputDeviceUID == nil {
             handleInputLockEnabled()
         }
-        guard let lockedUID = settingsManager.lockedInputDeviceUID,
-              let lockedDevice = deviceMonitor.inputDevice(for: lockedUID) else {
-            // No locked device or it's unavailable - fall back to built-in
+        if let preferredUID = settingsManager.preferredInputDeviceUID,
+           let preferred = deviceMonitor.inputDevice(for: preferredUID),
+           isAliveCheck(preferred.id) {
+            // The preferred receiver may already be present at startup, so there
+            // may be no connection event to replace the previously saved fallback.
+            applyInputDeviceLock(preferred)
+        } else if let lockedUID = settingsManager.lockedInputDeviceUID,
+                  let lockedDevice = deviceMonitor.inputDevice(for: lockedUID),
+                  isAliveCheck(lockedDevice.id) {
+            applyInputDeviceLock(lockedDevice)
+        } else {
             lockToBuiltInMicrophone()
-            return
-        }
-
-        // Don't restore if already on the locked device
-        guard deviceVolumeMonitor.defaultInputDeviceUID != lockedUID else { return }
-
-        logger.info("Restoring locked input device: \(lockedDevice.name)")
-        if deviceVolumeMonitor.setDefaultInputDevice(lockedDevice.id) {
-            inputEchoTracker.increment(lockedDevice.uid)
         }
     }
 
@@ -2125,10 +2121,13 @@ final class AudioEngine {
     }
 
     /// Applies input device lock without changing the user's preferred device.
-    /// Used for fallback scenarios (disconnect, built-in mic recovery).
     private func applyInputDeviceLock(_ device: AudioDevice) {
-        logger.info("Locking input device to: \(device.name)")
-        settingsManager.setLockedInputDeviceUID(device.uid)
+        if settingsManager.lockedInputDeviceUID != device.uid {
+            settingsManager.setLockedInputDeviceUID(device.uid)
+        }
+        guard deviceVolumeMonitor.defaultInputDeviceUID != device.uid else { return }
+
+        logger.info("Restoring locked input device: \(device.name)")
         if deviceVolumeMonitor.setDefaultInputDevice(device.id) {
             inputEchoTracker.increment(device.uid)
         }
@@ -2162,19 +2161,9 @@ final class AudioEngine {
     }
 
     /// Called when an input device connects — restores locked/preferred device and guards against auto-switch.
-    private func handleInputDeviceConnected(_ deviceUID: String, name deviceName: String) {
+    private func handleInputDeviceConnected(_ deviceUID: String) {
         guard settingsManager.appSettings.lockInputDevice else { return }
 
-        // If the reconnected device is the user's preferred device, restore the lock to it
-        if let preferredUID = settingsManager.preferredInputDeviceUID,
-           deviceUID == preferredUID,
-           settingsManager.lockedInputDeviceUID != preferredUID,
-           let device = deviceMonitor.inputDevice(for: deviceUID) {
-            logger.info("Preferred input device reconnected: \(deviceName), restoring lock")
-            settingsManager.setLockedInputDeviceUID(device.uid)
-        }
-
-        // Restore the user's locked device (not priority-based — lock overrides priority)
         restoreLockedInputDevice()
 
         // Cancel any existing PENDING_AUTOSWITCH before entering a new one

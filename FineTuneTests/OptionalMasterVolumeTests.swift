@@ -117,6 +117,25 @@ struct OptionalMasterVolumeTests {
         #expect(fixture.volume.setDefaultInputCalls.isEmpty)
     }
 
+    @Test("Input lock restores an already connected preferred receiver at startup")
+    func inputLockRestoresPreferredReceiverAtStartup() {
+        let fixture = MasterVolumeFixture()
+        let builtIn = AudioDevice(id: 916, uid: "built-in-mic", name: "Built-in Microphone", icon: nil, supportsAutoEQ: false)
+        fixture.devices.addInputDevice(builtIn)
+        fixture.volume.defaultInputDeviceUID = builtIn.uid
+        fixture.settings.setLockedInputDeviceUID(builtIn.uid)
+        fixture.settings.setPreferredInputDeviceUID(fixture.dji.uid)
+
+        let engine = fixture.engine
+        engine.start()
+        defer { engine.stop() }
+
+        #expect(fixture.settings.lockedInputDeviceUID == fixture.dji.uid)
+        #expect(fixture.settings.preferredInputDeviceUID == fixture.dji.uid)
+        #expect(fixture.volume.defaultInputDeviceUID == fixture.dji.uid)
+        #expect(fixture.volume.setDefaultInputCalls == [fixture.dji.id])
+    }
+
     @Test("Repeating output reconnects preserves master state and restores the locked microphone")
     func repeatedReconnectWithInputLock() async throws {
         let fixture = MasterVolumeFixture()
