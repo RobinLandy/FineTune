@@ -136,6 +136,90 @@ struct OptionalMasterVolumeTests {
         #expect(fixture.volume.setDefaultInputCalls == [fixture.dji.id])
     }
 
+    @Test("Preferred microphones switch between office and home and ignore AirPods input")
+    func preferredMicrophoneReconnects() async {
+        let fixture = MasterVolumeFixture()
+        let engine = fixture.engine
+        fixture.connectInput(fixture.builtInMic)
+        fixture.connectInput(fixture.airPodsMic)
+        fixture.volume.defaultInputDeviceUID = fixture.builtInMic.uid
+        let preferences = [fixture.dji, fixture.webcam].map { PreferredMicrophone(uid: $0.uid, name: $0.name) }
+        engine.setPreferredMicrophones(preferences)
+        defer { engine.stop() }
+        #expect(fixture.volume.defaultInputDeviceUID == fixture.dji.uid)
+
+        for _ in 0..<3 {
+            fixture.disconnectInput(fixture.dji)
+            #expect(fixture.volume.defaultInputDeviceUID == fixture.builtInMic.uid)
+
+            fixture.connectInput(fixture.webcam)
+            #expect(fixture.volume.defaultInputDeviceUID == fixture.webcam.uid)
+            fixture.volume.defaultInputDeviceUID = fixture.airPodsMic.uid
+            fixture.volume.onDefaultInputDeviceChanged?(fixture.airPodsMic.uid)
+            await waitFor { fixture.volume.defaultInputDeviceUID == fixture.webcam.uid }
+            #expect(fixture.volume.defaultInputDeviceUID == fixture.webcam.uid)
+
+            fixture.disconnectInput(fixture.webcam)
+            fixture.connectInput(fixture.dji)
+            #expect(fixture.volume.defaultInputDeviceUID == fixture.dji.uid)
+        }
+
+        #expect(fixture.settings.preferredMicrophones == preferences)
+        #expect(!fixture.volume.setDefaultInputCalls.contains(fixture.airPodsMic.id))
+    }
+
+    @Test("Preferred microphones persist and take precedence over a saved fallback at startup")
+    func preferredMicrophoneStartup() {
+        let fixture = MasterVolumeFixture()
+        fixture.settings.setLockedInputDeviceUID(fixture.builtInMic.uid)
+        fixture.settings.setPreferredInputDeviceUID(fixture.dji.uid)
+        let preferences = [fixture.dji, fixture.webcam].map { PreferredMicrophone(uid: $0.uid, name: $0.name) }
+        fixture.settings.setPreferredMicrophones(preferences)
+        fixture.settings.flushSync()
+        fixture.settings = SettingsManager(directory: fixture.directory)
+        #expect(fixture.settings.preferredMicrophones == preferences)
+
+        fixture.disconnectInput(fixture.dji)
+        fixture.connectInput(fixture.builtInMic)
+        fixture.connectInput(fixture.webcam)
+        fixture.volume.defaultInputDeviceUID = fixture.builtInMic.uid
+        fixture.engine.start()
+        defer { fixture.engine.stop() }
+        #expect(fixture.volume.defaultInputDeviceUID == fixture.webcam.uid)
+        #expect(fixture.volume.setDefaultInputCalls == [fixture.webcam.id])
+        #expect(fixture.settings.preferredInputDeviceUID == fixture.dji.uid)
+    }
+
+    @Test("Microphone order resolves overlaps and manual selection lasts until a preferred microphone reconnects")
+    func preferredMicrophoneOrderAndManualSelection() {
+        let fixture = MasterVolumeFixture()
+        let engine = fixture.engine
+        fixture.connectInput(fixture.builtInMic)
+        fixture.connectInput(fixture.webcam)
+        let preferences = [fixture.dji, fixture.webcam].map { PreferredMicrophone(uid: $0.uid, name: $0.name) }
+        engine.setPreferredMicrophones(preferences)
+        defer { engine.stop() }
+        #expect(fixture.volume.defaultInputDeviceUID == fixture.dji.uid)
+
+        engine.setPreferredMicrophones(Array(preferences.reversed()))
+        #expect(fixture.volume.defaultInputDeviceUID == fixture.webcam.uid)
+
+        engine.setLockedInputDevice(fixture.builtInMic)
+        fixture.connectInput(fixture.airPodsMic)
+        #expect(fixture.volume.defaultInputDeviceUID == fixture.builtInMic.uid)
+        fixture.disconnectInput(fixture.webcam)
+        fixture.connectInput(fixture.webcam)
+        #expect(fixture.volume.defaultInputDeviceUID == fixture.webcam.uid)
+
+        fixture.settings.appSettings.lockInputDevice = false
+        fixture.disconnectInput(fixture.webcam)
+        #expect(fixture.volume.defaultInputDeviceUID == fixture.webcam.uid)
+
+        fixture.settings.appSettings.lockInputDevice = true
+        engine.handleInputLockEnabled()
+        #expect(fixture.volume.defaultInputDeviceUID == fixture.dji.uid)
+    }
+
     @Test("Repeating output reconnects preserves master state and restores the locked microphone")
     func repeatedReconnectWithInputLock() async throws {
         let fixture = MasterVolumeFixture()
@@ -286,6 +370,8 @@ private final class MasterVolumeFixture {
     let airPods = AudioDevice(id: 913, uid: "airpods", name: "AirPods", icon: nil, supportsAutoEQ: false)
     let dji = AudioDevice(id: 914, uid: "dji", name: "DJI Mic Mini 2", icon: nil, supportsAutoEQ: false)
     let airPodsMic = AudioDevice(id: 915, uid: "airpods-mic", name: "AirPods Mic", icon: nil, supportsAutoEQ: false)
+    let builtInMic = AudioDevice(id: 916, uid: "built-in-mic", name: "Built-in Microphone", icon: nil, supportsAutoEQ: false)
+    let webcam = AudioDevice(id: 917, uid: "webcam", name: "Insta360 Link 2", icon: nil, supportsAutoEQ: false)
     let app = AudioApp(id: 91234, processObjectIDs: [], name: "Player", icon: NSImage(), bundleID: "test.master-player")
     lazy var settings = SettingsManager(directory: directory)
     lazy var volume = MockDeviceVolumeProviding(deviceMonitor: devices)
@@ -303,7 +389,9 @@ private final class MasterVolumeFixture {
                 self?.tap = tap
                 return tap
             },
-            isAlive: { _ in true }, startMonitorsAutomatically: false
+            isAlive: { _ in true },
+            inputTransport: { [builtInMic] in $0 == builtInMic.id ? .builtIn : .unknown },
+            startMonitorsAutomatically: false
         )
     }()
 
@@ -312,6 +400,16 @@ private final class MasterVolumeFixture {
         devices.addInputDevice(dji)
         volume.setDefaultDevice(speakers.id)
         settings.appSettings.showDeviceDisconnectAlerts = false
+    }
+
+    func connectInput(_ device: AudioDevice) {
+        devices.addInputDevice(device)
+        devices.onInputDeviceConnected?(device.uid, device.name)
+    }
+
+    func disconnectInput(_ device: AudioDevice) {
+        devices.inputDevices.removeAll { $0.uid == device.uid }
+        devices.onInputDeviceDisconnected?(device.uid, device.name)
     }
 
     func makeMediaKeyMonitor() -> MediaKeyMonitor {

@@ -28,6 +28,8 @@ final class AudioEngine {
 
     /// Closure to check if a device is alive. Overridable for testing.
     private let isAliveCheck: (AudioDeviceID) -> Bool
+    private let inputTransport: (AudioDeviceID) -> TransportType
+    private var manualInputOverrideUID: String?
 
     /// One-shot HAL listeners for devices that were present but not alive during priority resolution.
     /// Keyed by AudioDeviceID. Each entry holds the device UID, listener block, and a timeout task.
@@ -180,6 +182,7 @@ final class AudioEngine {
         deviceVolumeMonitor: (any DeviceVolumeProviding)? = nil,
         tapFactory: (@MainActor (AudioApp, [String], String?) throws -> any ProcessTapControlling)? = nil,
         isAlive: ((AudioDeviceID) -> Bool)? = nil,
+        inputTransport: @escaping (AudioDeviceID) -> TransportType = { $0.readTransportType() },
         startMonitorsAutomatically: Bool = true
     ) {
         self.permission = permission
@@ -189,6 +192,7 @@ final class AudioEngine {
         self.autoEQProfileManager = autoEQProfileManager
         self.volumeState = VolumeState(settingsManager: manager)
         self.isAliveCheck = isAlive ?? { $0.isDeviceAlive() }
+        self.inputTransport = inputTransport
 
         // If a custom deviceProvider is given, use it directly.
         // Otherwise create a real AudioDeviceMonitor (needed by DeviceVolumeMonitor and default tap factory).
@@ -586,6 +590,10 @@ final class AudioEngine {
 
     func stop() {
         stopHealthMonitor()
+        if case .pendingAutoSwitch(_, let task) = inputPriorityState {
+            task.cancel()
+            inputPriorityState = .stable
+        }
         processMonitor.stop()
         deviceMonitor.stop()
         for tap in taps.values {
@@ -2032,6 +2040,14 @@ final class AudioEngine {
     /// Handles changes to the default input device.
     /// Uses state machine to distinguish auto-switch (from device connection) vs user action.
     private func handleDefaultInputDeviceChanged(_ newDefaultInputUID: String) {
+        if !settingsManager.preferredMicrophones.isEmpty {
+            _ = inputEchoTracker.consume(newDefaultInputUID)
+            if settingsManager.appSettings.lockInputDevice {
+                restorePreferredMicrophone()
+            }
+            return
+        }
+
         // State machine: if we're waiting for macOS to auto-switch after input device connect,
         // check whether this change is the expected auto-switch or user intent.
         if case .pendingAutoSwitch(let pendingUID, let timeoutTask) = inputPriorityState {
@@ -2040,7 +2056,7 @@ final class AudioEngine {
                 // Re-enter PENDING_AUTOSWITCH because macOS may auto-switch multiple times.
                 timeoutTask.cancel()
                 restoreLockedInputDevice()
-                let transport = deviceMonitor.inputDevice(for: pendingUID)?.id.readTransportType()
+                let transport = deviceMonitor.inputDevice(for: pendingUID).map { inputTransport($0.id) }
                 let timeout = (transport == .bluetooth || transport == .bluetoothLE)
                     ? btAutoSwitchGracePeriod
                     : autoSwitchGracePeriod
@@ -2087,6 +2103,11 @@ final class AudioEngine {
 
     /// Restores the preferred input when available, then tries the last fallback.
     private func restoreLockedInputDevice() {
+        if !settingsManager.preferredMicrophones.isEmpty {
+            restorePreferredMicrophone()
+            return
+        }
+
         // A fresh install has no saved lock. Capture the user's current system input,
         // just as we do when the user enables the lock in Settings.
         if settingsManager.lockedInputDeviceUID == nil, settingsManager.preferredInputDeviceUID == nil {
@@ -2107,11 +2128,30 @@ final class AudioEngine {
         }
     }
 
+    func setPreferredMicrophones(_ microphones: [PreferredMicrophone]) {
+        settingsManager.setPreferredMicrophones(microphones)
+        manualInputOverrideUID = nil
+        if settingsManager.appSettings.lockInputDevice {
+            restoreLockedInputDevice()
+        }
+    }
+
+    private func restorePreferredMicrophone(excluding excludedUID: String? = nil) {
+        let candidates = [manualInputOverrideUID].compactMap { $0 } + settingsManager.preferredMicrophones.map(\.uid)
+        for uid in candidates where uid != excludedUID {
+            if let device = deviceMonitor.inputDevice(for: uid), isAliveCheck(device.id) {
+                applyInputDeviceLock(device)
+                return
+            }
+        }
+        lockToBuiltInMicrophone(excluding: excludedUID)
+    }
+
     /// Locks the input device to the built-in microphone.
     /// This is a fallback — does NOT update preferredInputDeviceUID.
-    private func lockToBuiltInMicrophone() {
+    private func lockToBuiltInMicrophone(excluding excludedUID: String? = nil) {
         guard let builtInMic = deviceMonitor.inputDevices.first(where: {
-            $0.id.readTransportType() == .builtIn
+            $0.uid != excludedUID && inputTransport($0.id) == .builtIn && isAliveCheck($0.id)
         }) else {
             logger.warning("No built-in microphone found")
             return
@@ -2134,8 +2174,13 @@ final class AudioEngine {
     }
 
     /// Called when the user toggles lockInputDevice ON in settings.
-    /// Captures the current default input device as the locked and preferred device.
     func handleInputLockEnabled() {
+        manualInputOverrideUID = nil
+        if !settingsManager.preferredMicrophones.isEmpty {
+            restorePreferredMicrophone()
+            return
+        }
+
         guard let currentUID = deviceVolumeMonitor.defaultInputDeviceUID,
               let device = deviceMonitor.inputDevice(for: currentUID) else {
             return
@@ -2149,6 +2194,12 @@ final class AudioEngine {
     /// Persists the choice and applies the change.
     func setLockedInputDevice(_ device: AudioDevice) {
         logger.info("User locked input device to: \(device.name)")
+
+        if settingsManager.appSettings.lockInputDevice, !settingsManager.preferredMicrophones.isEmpty {
+            manualInputOverrideUID = device.uid
+            applyInputDeviceLock(device)
+            return
+        }
 
         // Persist the choice — both current lock and preferred (user intent)
         settingsManager.setLockedInputDeviceUID(device.uid)
@@ -2164,6 +2215,9 @@ final class AudioEngine {
     private func handleInputDeviceConnected(_ deviceUID: String) {
         guard settingsManager.appSettings.lockInputDevice else { return }
 
+        if settingsManager.preferredMicrophones.contains(where: { $0.uid == deviceUID }) {
+            manualInputOverrideUID = nil
+        }
         restoreLockedInputDevice()
 
         // Cancel any existing PENDING_AUTOSWITCH before entering a new one
@@ -2173,7 +2227,7 @@ final class AudioEngine {
 
         // Always enter PENDING_AUTOSWITCH — macOS may auto-switch to the newly connected
         // device multiple times during BT handshake, even if we just restored the lock.
-        let transport = deviceMonitor.inputDevice(for: deviceUID)?.id.readTransportType()
+        let transport = deviceMonitor.inputDevice(for: deviceUID).map { inputTransport($0.id) }
         let timeout = (transport == .bluetooth || transport == .bluetoothLE)
             ? btAutoSwitchGracePeriod
             : autoSwitchGracePeriod
@@ -2182,7 +2236,10 @@ final class AudioEngine {
             try? await Task.sleep(for: .seconds(timeout))
             guard let self, !Task.isCancelled else { return }
             self.inputPriorityState = .stable
-            self.logger.debug("Input auto-switch grace period expired, no macOS switch detected")
+            if self.settingsManager.appSettings.lockInputDevice, !self.settingsManager.preferredMicrophones.isEmpty {
+                self.restorePreferredMicrophone()
+            }
+            self.logger.debug("Input auto-switch grace period expired")
         }
 
         inputPriorityState = .pendingAutoSwitch(
@@ -2197,6 +2254,16 @@ final class AudioEngine {
         if case .pendingAutoSwitch(let uid, let task) = inputPriorityState, uid == deviceUID {
             task.cancel()
             inputPriorityState = .stable
+        }
+
+        if !settingsManager.preferredMicrophones.isEmpty {
+            if manualInputOverrideUID == deviceUID {
+                manualInputOverrideUID = nil
+            }
+            if settingsManager.appSettings.lockInputDevice {
+                restorePreferredMicrophone(excluding: deviceUID)
+            }
+            return
         }
 
         // Snapshot before async callbacks can update it

@@ -26,6 +26,7 @@ struct AudioTab: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 volumeSection
+                microphoneSection
                 devicesSection
             }
             .padding(.horizontal, 20)
@@ -90,18 +91,81 @@ struct AudioTab: View {
 
     // MARK: - Devices
 
-    private var devicesSection: some View {
-        SettingsSection("Devices") {
+    private var microphoneSection: some View {
+        SettingsSection("Microphone") {
             SettingsRow(
                 "Lock Input Device",
-                description: "Prevent auto-switching when devices connect"
+                description: "Keep your selected microphone or switch automatically between your preferred microphones."
             ) {
                 Toggle("", isOn: $settings.appSettings.lockInputDevice)
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .labelsHidden()
             }
-            SettingsRowDivider()
+            if settings.appSettings.lockInputDevice {
+                SettingsRowDivider()
+                SettingsRow(
+                    "Preferred Microphones",
+                    description: "FineTune uses the first connected microphone in this list, then the built-in mic. Connect each microphone once to add it."
+                ) {
+                    let available = audioEngine.inputDevices.filter { device in
+                        !settings.preferredMicrophones.contains { $0.uid == device.uid }
+                    }
+                    Menu("Add Microphone") {
+                        ForEach(available) { device in
+                            Button(device.name) {
+                                audioEngine.setPreferredMicrophones(
+                                    settings.preferredMicrophones + [PreferredMicrophone(uid: device.uid, name: device.name)]
+                                )
+                            }
+                        }
+                    }
+                    .fixedSize()
+                    .disabled(available.isEmpty)
+                }
+                ForEach(settings.preferredMicrophones) { microphone in
+                    let connected = audioEngine.inputDevices.contains { $0.uid == microphone.uid }
+                    SettingsRowDivider()
+                    SettingsRow(microphone.name, description: connected ? nil : "Disconnected") {
+                        microphoneOrderControls(microphone)
+                    }
+                }
+            }
+        }
+    }
+
+    private func microphoneOrderControls(_ microphone: PreferredMicrophone) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                movePreferredMicrophone(microphone, by: -1)
+            } label: {
+                Label("Move \(microphone.name) up", systemImage: "chevron.up").labelStyle(.iconOnly)
+            }
+            .disabled(settings.preferredMicrophones.first == microphone)
+            Button {
+                movePreferredMicrophone(microphone, by: 1)
+            } label: {
+                Label("Move \(microphone.name) down", systemImage: "chevron.down").labelStyle(.iconOnly)
+            }
+            .disabled(settings.preferredMicrophones.last == microphone)
+            Button {
+                audioEngine.setPreferredMicrophones(settings.preferredMicrophones.filter { $0 != microphone })
+            } label: {
+                Label("Remove \(microphone.name)", systemImage: "minus.circle").labelStyle(.iconOnly)
+            }
+        }
+        .controlSize(.small)
+    }
+
+    private func movePreferredMicrophone(_ microphone: PreferredMicrophone, by offset: Int) {
+        var microphones = settings.preferredMicrophones
+        guard let index = microphones.firstIndex(of: microphone), microphones.indices.contains(index + offset) else { return }
+        microphones.swapAt(index, index + offset)
+        audioEngine.setPreferredMicrophones(microphones)
+    }
+
+    private var devicesSection: some View {
+        SettingsSection("Devices") {
             SettingsRow(
                 "System Sounds",
                 description: "Where alerts and effects play"

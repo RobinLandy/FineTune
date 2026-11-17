@@ -85,6 +85,13 @@ nonisolated struct AppSettings: Codable, Equatable {
 
 // MARK: - Settings Manager
 
+struct PreferredMicrophone: Codable, Equatable, Identifiable {
+    let uid: String
+    let name: String
+
+    var id: String { uid }
+}
+
 @Observable
 @MainActor
 final class SettingsManager {
@@ -109,6 +116,7 @@ final class SettingsManager {
         var appSelectedDeviceUIDs: [String: [String]] = [:]  // bundleID → array of device UIDs for multi mode
         var lockedInputDeviceUID: String? = nil  // Current locked input device (updated on fallback)
         var preferredInputDeviceUID: String? = nil  // User's intended input device (survives disconnect)
+        var preferredMicrophones: [PreferredMicrophone] = []
         var pinnedApps: Set<String> = []  // Persistence identifiers of pinned apps
         var pinnedAppInfo: [String: PinnedAppInfo] = [:]  // Persistence identifier → app metadata
         var ignoredApps: Set<String> = []  // Persistence identifiers of hidden apps
@@ -172,6 +180,7 @@ final class SettingsManager {
             appSelectedDeviceUIDs = try c.decodeIfPresent([String: [String]].self, forKey: .appSelectedDeviceUIDs) ?? [:]
             lockedInputDeviceUID = try c.decodeIfPresent(String.self, forKey: .lockedInputDeviceUID)
             preferredInputDeviceUID = try c.decodeIfPresent(String.self, forKey: .preferredInputDeviceUID)
+            preferredMicrophones = try c.decodeIfPresent([PreferredMicrophone].self, forKey: .preferredMicrophones) ?? []
             pinnedApps = try c.decodeIfPresent(Set<String>.self, forKey: .pinnedApps) ?? []
             pinnedAppInfo = try c.decodeIfPresent([String: PinnedAppInfo].self, forKey: .pinnedAppInfo) ?? [:]
             ignoredApps = try c.decodeIfPresent(Set<String>.self, forKey: .ignoredApps) ?? []
@@ -331,6 +340,16 @@ final class SettingsManager {
 
     func setPreferredInputDeviceUID(_ uid: String?) {
         settings.preferredInputDeviceUID = uid
+        scheduleSave()
+    }
+
+    var preferredMicrophones: [PreferredMicrophone] {
+        settings.preferredMicrophones
+    }
+
+    func setPreferredMicrophones(_ microphones: [PreferredMicrophone]) {
+        guard settings.preferredMicrophones != microphones else { return }
+        settings.preferredMicrophones = microphones
         scheduleSave()
     }
 
@@ -865,6 +884,7 @@ final class SettingsManager {
         settings.systemSoundsFollowsDefault = true
         settings.lockedInputDeviceUID = nil
         settings.preferredInputDeviceUID = nil
+        settings.preferredMicrophones.removeAll()
         settings.ddcVolumes.removeAll()
         settings.ddcMuteStates.removeAll()
         settings.ddcSavedVolumes.removeAll()
