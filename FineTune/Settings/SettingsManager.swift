@@ -56,6 +56,7 @@ nonisolated struct AppSettings: Codable, Equatable {
 
     // Popup
     var popupSize: MenuBarPopupSize = .comfortable  // Overall menu bar popup size and density
+    var showsCombinedDeviceLists = false
 
     init() {}
 
@@ -80,6 +81,7 @@ nonisolated struct AppSettings: Codable, Equatable {
         customShortcuts = try c.decodeIfPresent([String: ShortcutCodable].self, forKey: .customShortcuts) ?? [:]
         appearance = try c.decodeIfPresent(AppearancePreference.self, forKey: .appearance) ?? .system
         popupSize = try c.decodeIfPresent(MenuBarPopupSize.self, forKey: .popupSize) ?? .comfortable
+        showsCombinedDeviceLists = try c.decodeIfPresent(Bool.self, forKey: .showsCombinedDeviceLists) ?? false
     }
 }
 

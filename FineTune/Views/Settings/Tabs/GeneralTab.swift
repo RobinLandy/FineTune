@@ -82,6 +82,16 @@ struct GeneralTab: View {
             ) {
                 PopupSizeTilePicker(selection: $settings.appSettings.popupSize)
             }
+            SettingsRowDivider()
+            SettingsRow(
+                "Show Input and Output Together",
+                description: "List speakers and microphones in the same popup."
+            ) {
+                Toggle("Show Input and Output Together", isOn: $settings.appSettings.showsCombinedDeviceLists)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+            }
         }
     }
 

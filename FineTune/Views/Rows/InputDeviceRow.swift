@@ -13,6 +13,7 @@ struct InputDeviceRow: View {
     let onMuteToggle: () -> Void
     let isFocused: Bool
     let iconOverrideSymbol: String?
+    let battery: BluetoothBatteryReading?
 
     @State private var sliderValue: Double
     @State private var isEditing = false
@@ -49,7 +50,8 @@ struct InputDeviceRow: View {
         onVolumeChange: @escaping (Float) -> Void,
         onMuteToggle: @escaping () -> Void,
         isFocused: Bool = false,
-        iconOverrideSymbol: String? = nil
+        iconOverrideSymbol: String? = nil,
+        battery: BluetoothBatteryReading? = nil
     ) {
         self.device = device
         self.isDefault = isDefault
@@ -60,11 +62,18 @@ struct InputDeviceRow: View {
         self.onMuteToggle = onMuteToggle
         self.isFocused = isFocused
         self.iconOverrideSymbol = iconOverrideSymbol
+        self.battery = battery
         self._sliderValue = State(initialValue: Double(volume))
     }
 
     var body: some View {
-        deviceHeader
+        VStack(alignment: .leading, spacing: 0) {
+            deviceHeader
+            if let battery {
+                BluetoothBatteryLabel(reading: battery)
+                    .padding(.bottom, 3)
+            }
+        }
             .contentShape(Rectangle())
             .onTapGesture {
                 if !isDefault {
