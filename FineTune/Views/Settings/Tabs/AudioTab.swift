@@ -108,9 +108,9 @@ struct AudioTab: View {
                     "Preferred Microphones",
                     description: "FineTune uses the first connected microphone in this list, then the built-in mic. Connect each microphone once to add it."
                 ) {
-                    let available = audioEngine.inputDevices.filter { device in
-                        !settings.preferredMicrophones.contains { $0.uid == device.uid }
-                    }
+                    let saved = Set(settings.preferredMicrophones.map(\.uid))
+                    let matched = Set(settings.preferredMicrophones.compactMap { audioEngine.connectedPreferredMicrophone($0)?.uid })
+                    let available = audioEngine.inputDevices.filter { !saved.contains($0.uid) && !matched.contains($0.uid) }
                     Menu("Add Microphone") {
                         ForEach(available) { device in
                             Button(device.name) {
@@ -124,7 +124,7 @@ struct AudioTab: View {
                     .disabled(available.isEmpty)
                 }
                 ForEach(settings.preferredMicrophones) { microphone in
-                    let connected = audioEngine.inputDevices.contains { $0.uid == microphone.uid }
+                    let connected = audioEngine.connectedPreferredMicrophone(microphone) != nil
                     SettingsRowDivider()
                     SettingsRow(microphone.name, description: connected ? nil : "Disconnected") {
                         microphoneOrderControls(microphone)

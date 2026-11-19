@@ -2136,10 +2136,31 @@ final class AudioEngine {
         }
     }
 
+    func connectedPreferredMicrophone(_ microphone: PreferredMicrophone, excluding excludedUID: String? = nil) -> AudioDevice? {
+        if let exact = deviceMonitor.inputDevice(for: microphone.uid), exact.uid != excludedUID {
+            return isAliveCheck(exact.id) ? exact : nil
+        }
+
+        guard let identity = microphone.usbLocationIndependentUID,
+              !settingsManager.preferredMicrophones.contains(where: {
+                  $0.uid != microphone.uid && $0.usbLocationIndependentUID == identity
+              }) else { return nil }
+
+        let matches = inputDevices.filter {
+            $0.uid != excludedUID && PreferredMicrophone.usbLocationIndependentUID(for: $0.uid) == identity
+        }
+        guard matches.count == 1, let device = matches.first, isAliveCheck(device.id) else { return nil }
+        return device
+    }
+
     private func restorePreferredMicrophone(excluding excludedUID: String? = nil) {
-        let candidates = [manualInputOverrideUID].compactMap { $0 } + settingsManager.preferredMicrophones.map(\.uid)
-        for uid in candidates where uid != excludedUID {
-            if let device = deviceMonitor.inputDevice(for: uid), isAliveCheck(device.id) {
+        if let uid = manualInputOverrideUID, uid != excludedUID,
+           let device = deviceMonitor.inputDevice(for: uid), isAliveCheck(device.id) {
+            applyInputDeviceLock(device)
+            return
+        }
+        for microphone in settingsManager.preferredMicrophones {
+            if let device = connectedPreferredMicrophone(microphone, excluding: excludedUID) {
                 applyInputDeviceLock(device)
                 return
             }
@@ -2215,7 +2236,9 @@ final class AudioEngine {
     private func handleInputDeviceConnected(_ deviceUID: String) {
         guard settingsManager.appSettings.lockInputDevice else { return }
 
-        if settingsManager.preferredMicrophones.contains(where: { $0.uid == deviceUID }) {
+        if settingsManager.preferredMicrophones.contains(where: {
+            $0.uid == deviceUID || connectedPreferredMicrophone($0)?.uid == deviceUID
+        }) {
             manualInputOverrideUID = nil
         }
         restoreLockedInputDevice()

@@ -190,6 +190,68 @@ struct OptionalMasterVolumeTests {
         #expect(fixture.settings.preferredInputDeviceUID == fixture.dji.uid)
     }
 
+    @Test("A preferred USB microphone works at startup and after its USB location changes")
+    func preferredMicrophoneChangesUSBLocation() {
+        let fixture = MasterVolumeFixture()
+        let original = usbWebcam(id: 918, location: "22100000")
+        let moved = usbWebcam(id: 919, location: "21100000")
+        let preference = PreferredMicrophone(uid: original.uid, name: original.name)
+        fixture.devices.addInputDevice(fixture.builtInMic)
+        fixture.devices.addInputDevice(moved)
+        fixture.volume.defaultInputDeviceUID = fixture.builtInMic.uid
+        fixture.settings.setPreferredMicrophones([preference])
+
+        let engine = fixture.engine
+        engine.start()
+        defer { engine.stop() }
+        #expect(fixture.volume.defaultInputDeviceUID == moved.uid)
+        #expect(engine.connectedPreferredMicrophone(preference)?.id == moved.id)
+
+        engine.setLockedInputDevice(fixture.builtInMic)
+        fixture.disconnectInput(moved)
+        fixture.connectInput(original)
+        #expect(fixture.volume.defaultInputDeviceUID == original.uid)
+
+        fixture.disconnectInput(original)
+        fixture.connectInput(moved)
+        #expect(fixture.volume.defaultInputDeviceUID == moved.uid)
+        #expect(fixture.settings.preferredMicrophones == [preference])
+    }
+
+    @Test("Exact USB IDs win and ambiguous or unrelated devices cannot replace a preferred microphone")
+    func preferredUSBMicrophoneRequiresUniqueMatch() {
+        let fixture = MasterVolumeFixture()
+        let original = usbWebcam(id: 918, location: "22100000")
+        let moved = usbWebcam(id: 919, location: "21100000")
+        let other = usbWebcam(id: 920, location: "23100000")
+        let serial = usbWebcam(id: 921, location: "ABCD1234")
+        let preference = PreferredMicrophone(uid: original.uid, name: original.name)
+        let otherPreference = PreferredMicrophone(uid: other.uid, name: other.name)
+        fixture.settings.setPreferredMicrophones([preference])
+        fixture.devices.addInputDevice(moved)
+        fixture.devices.addInputDevice(other)
+        fixture.devices.addInputDevice(serial)
+        fixture.devices.addInputDevice(fixture.webcam)
+        let engine = fixture.engine
+        #expect(engine.connectedPreferredMicrophone(preference) == nil)
+
+        fixture.devices.addInputDevice(original)
+        #expect(engine.connectedPreferredMicrophone(preference)?.id == original.id)
+        fixture.devices.inputDevices.removeAll { $0.id == original.id || $0.id == other.id }
+        #expect(engine.connectedPreferredMicrophone(preference)?.id == moved.id)
+
+        fixture.settings.setPreferredMicrophones([preference, otherPreference])
+        #expect(engine.connectedPreferredMicrophone(preference) == nil)
+        fixture.settings.setPreferredMicrophones([preference])
+        fixture.devices.inputDevices.removeAll { $0.id == moved.id }
+        #expect(engine.connectedPreferredMicrophone(preference) == nil)
+    }
+
+    private func usbWebcam(id: AudioDeviceID, location: String) -> AudioDevice {
+        AudioDevice(id: id, uid: "AppleUSBAudioEngine:Insta360:Insta360 Link 2:\(location):3",
+                    name: "Insta360 Link 2", icon: nil, supportsAutoEQ: false)
+    }
+
     @Test("Microphone order resolves overlaps and manual selection lasts until a preferred microphone reconnects")
     func preferredMicrophoneOrderAndManualSelection() {
         let fixture = MasterVolumeFixture()
