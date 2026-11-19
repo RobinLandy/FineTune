@@ -19,6 +19,7 @@ final class BluetoothDeviceMonitor {
 
     /// Paired-but-disconnected audio BT devices, sorted by name.
     private(set) var pairedDevices: [PairedBluetoothDevice] = []
+    private(set) var batterySnapshot = BluetoothBatterySnapshot()
 
     /// MAC addresses currently in-flight (spinner shown).
     private(set) var connectingIDs: Set<String> = []
@@ -37,6 +38,9 @@ final class BluetoothDeviceMonitor {
     /// Serializes calls to avoid concurrent Mach port access and provides a stable
     /// thread context (unlike Task.detached which uses the cooperative thread pool).
     private nonisolated static let btQueue = DispatchQueue(label: "com.finetuneapp.bluetooth")
+    private nonisolated static let batteryQueue = DispatchQueue(label: "com.finetuneapp.bluetooth.battery", qos: .utility)
+    private var batteryTask: Task<Void, Never>?
+    private var batteryReadTask: Task<BluetoothBatterySnapshot, Never>?
 
     /// Pending timeout tasks keyed by MAC address.
     private var timeoutTasks: [String: Task<Void, Never>] = [:]
@@ -126,6 +130,57 @@ final class BluetoothDeviceMonitor {
             }
             pairedDevices = devices
             logger.debug("Paired BT audio devices: \(devices.count)")
+        }
+    }
+
+    // MARK: - Battery
+
+    func startBatteryUpdates() {
+        guard batteryTask == nil else { return }
+        batteryTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                let snapshot = await self.batteryReading()
+                guard !Task.isCancelled else { return }
+                self.batterySnapshot = snapshot
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
+    }
+
+    func stopBatteryUpdates() {
+        batteryTask?.cancel()
+        batteryTask = nil
+        batterySnapshot = BluetoothBatterySnapshot()
+    }
+
+    private func batteryReading() async -> BluetoothBatterySnapshot {
+        if let batteryReadTask { return await batteryReadTask.value }
+        let task = Task { await Self.readBatterySnapshot() }
+        batteryReadTask = task
+        let snapshot = await task.value
+        batteryReadTask = nil
+        return snapshot
+    }
+
+    private nonisolated static func readBatterySnapshot() async -> BluetoothBatterySnapshot {
+        await withCheckedContinuation { continuation in
+            batteryQueue.async {
+                let process = Process()
+                let output = Pipe()
+                process.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
+                process.arguments = ["-json", "-timeout", "5", "SPBluetoothDataType"]
+                process.standardOutput = output
+                process.standardError = FileHandle.nullDevice
+                do {
+                    try process.run()
+                    let data = output.fileHandleForReading.readDataToEndOfFile()
+                    process.waitUntilExit()
+                    let snapshot = process.terminationStatus == 0 ? try BluetoothBatterySnapshot(data: data) : BluetoothBatterySnapshot()
+                    continuation.resume(returning: snapshot)
+                } catch {
+                    continuation.resume(returning: BluetoothBatterySnapshot())
+                }
+            }
         }
     }
 

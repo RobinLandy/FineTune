@@ -11,25 +11,36 @@ extension MenuBarIconImage {
     static let canvasSize = NSSize(width: 22, height: 18)
 
     func nsImage(accessibilityDescription: String = "FineTune") -> NSImage? {
-        let source: NSImage?
+        let sources: [NSImage]
         switch self {
         case .systemSymbol(let name):
-            source = NSImage(systemSymbolName: name, accessibilityDescription: accessibilityDescription)
+            guard let source = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return nil }
+            sources = [source]
         case .asset(let name):
-            source = NSImage(named: name)
+            guard let source = NSImage(named: name) else { return nil }
+            sources = [source]
+        case .devicePair(let output, let input):
+            guard let outputImage = NSImage(systemSymbolName: output, accessibilityDescription: nil)
+                    ?? NSImage(systemSymbolName: "hifispeaker", accessibilityDescription: nil),
+                  let inputImage = NSImage(systemSymbolName: input, accessibilityDescription: nil)
+                    ?? NSImage(systemSymbolName: "mic", accessibilityDescription: nil) else { return nil }
+            sources = [outputImage, inputImage]
         }
-        guard let source else { return nil }
 
         let canvas = Self.canvasSize
-        let scale = min(1, canvas.width / source.size.width, canvas.height / source.size.height)
-        let drawRect = NSRect(
-            x: (canvas.width - source.size.width * scale) / 2,
-            y: (canvas.height - source.size.height * scale) / 2,
-            width: source.size.width * scale,
-            height: source.size.height * scale
-        )
-        let image = NSImage(size: canvas, flipped: false) { _ in
-            source.draw(in: drawRect)
+        let size = NSSize(width: canvas.width * CGFloat(sources.count), height: canvas.height)
+        let image = NSImage(size: size, flipped: false) { _ in
+            for (index, source) in sources.enumerated() {
+                let scale = min(1, canvas.width / source.size.width, canvas.height / source.size.height)
+                let width = source.size.width * scale
+                let height = source.size.height * scale
+                source.draw(in: NSRect(
+                    x: canvas.width * CGFloat(index) + (canvas.width - width) / 2,
+                    y: (canvas.height - height) / 2,
+                    width: width,
+                    height: height
+                ))
+            }
             return true
         }
         image.isTemplate = true

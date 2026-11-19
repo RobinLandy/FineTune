@@ -31,7 +31,6 @@ struct AccessibilityPromptStrip: View {
             Text(message)
                 .font(DesignTokens.Typography.rowDescription)
                 .foregroundStyle(DesignTokens.Colors.textSecondary)
-                .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: DesignTokens.Spacing.xs)
@@ -86,7 +85,7 @@ struct AccessibilityPromptStrip: View {
     private var message: String {
         showingGrantedFlourish
             ? "Access granted — volume keys now control FineTune."
-            : "FineTune needs Accessibility to intercept F10 / F11 / F12."
+            : "macOS hasn’t granted this copy of FineTune access to the volume keys. If it already appears enabled, remove the entry and add the copy in Applications again."
     }
 
     private func triggerGrantedFlourish() {

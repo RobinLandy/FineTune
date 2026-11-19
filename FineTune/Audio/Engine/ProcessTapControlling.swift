@@ -1,14 +1,16 @@
+import AudioToolbox
+
 /// Abstraction over process tap controllers for testability.
 ///
 /// **Threading:** The protocol surface is `@MainActor` — AudioEngine and tests
 /// interact with controllers from main. The concrete class straddles main and the
 /// CoreAudio HAL I/O thread, but the audio callback never goes through this
-/// protocol; it reads `nonisolated(unsafe)` atomic fields directly on the concrete
-/// type via a `void *` userdata pointer.
+/// protocol. CoreAudio invokes a block configured by the concrete controller.
 @MainActor
 protocol ProcessTapControlling: AnyObject, Sendable {
     var app: AudioApp { get }
     var volume: Float { get set }
+    var masterGain: Float { get set }
     var isMuted: Bool { get set }
     var currentDeviceVolume: Float { get set }
     var isDeviceMuted: Bool { get set }
@@ -30,11 +32,13 @@ protocol ProcessTapControlling: AnyObject, Sendable {
     func isHealthCheckEligible(minActiveSeconds: Double) -> Bool
 
     var tapSourceDeviceUID: String? { get }
-    func refreshTapSource(_ preferredDeviceUID: String?) async throws
-    func recreateForOutputRateChange() async throws
+    func includeAudioProcesses(_ processIDs: [AudioObjectID])
+    func recreateForOutputConfigurationChange() async throws
 }
 
 extension ProcessTapControlling {
+    func includeAudioProcesses(_ processIDs: [AudioObjectID]) {}
+
     /// Convenience activation with default state. Production callers must pass an
     /// `initial:` populated from persisted settings — defaults leave the first audio
     /// callbacks running with no EQ/AutoEQ/Loudness and unity volume ramp.
@@ -56,11 +60,7 @@ extension ProcessTapControlling {
         invalidate()
     }
 
-    func refreshTapSource(_ preferredDeviceUID: String?) async throws {
-        // Default no-op for mocks that don't override
-    }
-
-    func recreateForOutputRateChange() async throws {
+    func recreateForOutputConfigurationChange() async throws {
         // Default no-op for mocks that don't override
     }
 }

@@ -40,6 +40,16 @@ struct PopupKeyboardNavModelTests {
         #expect(model.orderedRowIDs.isEmpty)
     }
 
+    @Test func combinedLayoutKeepsInputAndOutputWithTheSameUIDDistinct() {
+        let model = PopupKeyboardNavModel()
+        let headset = makeDevice(uid: "headset")
+        model.syncOrder(activeDevices: [headset], inputDevices: [headset], appPersistenceIDs: ["app"], isEditingPriority: false)
+        #expect(model.orderedRowIDs == [.device(uid: "headset"), .inputDevice(uid: "headset"), .app(persistenceID: "app")])
+        #expect(model.defaultFocus(defaultOutputUID: "headset", defaultInputUID: "headset") == .device(uid: "headset"))
+        #expect(model.deviceFocus(uid: "headset", input: true) == .inputDevice(uid: "headset"))
+        #expect(model.deviceFocus(uid: nil, input: true) == .inputDevice(uid: "headset"))
+    }
+
     @Test func nextAfterNilReturnsFirstRow() {
         let model = PopupKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1")

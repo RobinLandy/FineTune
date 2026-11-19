@@ -45,4 +45,12 @@ struct AudioDeviceIconSymbolTests {
     func unknownNameUsesTransport(transport: TransportType, expected: String) {
         #expect(AudioDeviceID.iconSymbol(forName: "Generic USB Audio", transport: transport) == expected)
     }
+
+    @Test("USB webcams and wireless receivers get distinct input icons")
+    func inputIcons() {
+        #expect(AudioDeviceID.inputIconSymbol(forName: "Insta360 Link 2", transport: .usb) == "web.camera.fill")
+        #expect(AudioDeviceID.inputIconSymbol(forName: "USB Camera", transport: .usb) == "web.camera.fill")
+        #expect(AudioDeviceID.inputIconSymbol(forName: "Wireless Mic Rx", transport: .usb) == "mic.fill")
+        #expect(AudioDeviceID.inputIconSymbol(forName: "Generic USB Audio", transport: .usb) == "cable.connector")
+    }
 }

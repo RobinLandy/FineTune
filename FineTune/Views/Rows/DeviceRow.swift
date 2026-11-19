@@ -43,6 +43,7 @@ struct DeviceRow: View {
     let onAutoEQPreampToggle: (() -> Void)?
     let isFocused: Bool
     let iconOverrideSymbol: String?
+    let battery: BluetoothBatteryReading?
 
     @State private var sliderValue: Double
     @State private var isEditing = false
@@ -94,7 +95,8 @@ struct DeviceRow: View {
         autoEQPreampEnabled: Bool = true,
         onAutoEQPreampToggle: (() -> Void)? = nil,
         isFocused: Bool = false,
-        iconOverrideSymbol: String? = nil
+        iconOverrideSymbol: String? = nil,
+        battery: BluetoothBatteryReading? = nil
     ) {
         self.device = device
         self.isDefault = isDefault
@@ -118,11 +120,18 @@ struct DeviceRow: View {
         self.onAutoEQPreampToggle = onAutoEQPreampToggle
         self.isFocused = isFocused
         self.iconOverrideSymbol = iconOverrideSymbol
+        self.battery = battery
         self._sliderValue = State(initialValue: Self.volumeToSlider(volume, backend: volumeBackend))
     }
 
     var body: some View {
-        deviceHeader
+        VStack(alignment: .leading, spacing: 0) {
+            deviceHeader
+            if let battery {
+                BluetoothBatteryLabel(reading: battery)
+                    .padding(.bottom, 3)
+            }
+        }
             .contentShape(Rectangle())
             .onTapGesture {
                 // Whole-row tap sets this device as default. Inner controls

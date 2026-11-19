@@ -23,6 +23,7 @@ final class AccessibilityPermissionService: AccessibilityTrustProviding {
     var onTrustChanged: ((Bool) -> Void)?
 
     private var trustObserver: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
     private var debounceTask: Task<Void, Never>?
 
     private let logger = Logger(subsystem: "com.finetuneapp.FineTune", category: "AccessibilityPermissionService")
@@ -61,6 +62,11 @@ final class AccessibilityPermissionService: AccessibilityTrustProviding {
                 self?.scheduleDebouncedRefresh()
             }
         }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
     }
 
     /// Idempotent.
@@ -70,6 +76,10 @@ final class AccessibilityPermissionService: AccessibilityTrustProviding {
         if let observer = trustObserver {
             DistributedNotificationCenter.default().removeObserver(observer)
             trustObserver = nil
+        }
+        if let observer = activationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            activationObserver = nil
         }
     }
 

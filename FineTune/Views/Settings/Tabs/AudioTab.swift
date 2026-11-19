@@ -26,6 +26,7 @@ struct AudioTab: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 volumeSection
+                microphoneSection
                 devicesSection
             }
             .padding(.horizontal, 20)
@@ -39,6 +40,9 @@ struct AudioTab: View {
             if !oldValue && newValue {
                 audioEngine.handleInputLockEnabled()
             }
+        }
+        .onChange(of: settings.appSettings.repairMultiOutputUSBConnections) { _, enabled in
+            if enabled { audioEngine.repairMultiOutputConnections() }
         }
         .onChange(of: settings.appSettings.loudnessCompensationEnabled) { _, newValue in
             audioEngine.setLoudnessCompensationEnabled(newValue)
@@ -64,6 +68,19 @@ struct AudioTab: View {
             }
             SettingsRowDivider()
             SettingsRow(
+                "Master Volume for FineTune Audio",
+                description: "Control all FineTune-managed audio with one slider. Enable media key control to use the volume keys."
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { settings.appSettings.masterVolumeEnabled },
+                    set: { audioEngine.setMasterVolumeEnabled($0) }
+                ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+            }
+            SettingsRowDivider()
+            SettingsRow(
                 "Loudness Compensation",
                 description: "Boost low frequencies at low volume"
             ) {
@@ -77,13 +94,86 @@ struct AudioTab: View {
 
     // MARK: - Devices
 
+    private var microphoneSection: some View {
+        SettingsSection("Microphone") {
+            SettingsRow(
+                "Lock Input Device",
+                description: "Keep your selected microphone or switch automatically between your preferred microphones."
+            ) {
+                Toggle("", isOn: $settings.appSettings.lockInputDevice)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+            }
+            if settings.appSettings.lockInputDevice {
+                SettingsRowDivider()
+                SettingsRow(
+                    "Preferred Microphones",
+                    description: "FineTune uses the first connected microphone in this list, then the built-in mic. Connect each microphone once to add it."
+                ) {
+                    let saved = Set(settings.preferredMicrophones.map(\.uid))
+                    let matched = Set(settings.preferredMicrophones.compactMap { audioEngine.connectedPreferredMicrophone($0)?.uid })
+                    let available = audioEngine.inputDevices.filter { !saved.contains($0.uid) && !matched.contains($0.uid) }
+                    Menu("Add Microphone") {
+                        ForEach(available) { device in
+                            Button(device.name) {
+                                audioEngine.setPreferredMicrophones(
+                                    settings.preferredMicrophones + [PreferredMicrophone(uid: device.uid, name: device.name)]
+                                )
+                            }
+                        }
+                    }
+                    .fixedSize()
+                    .disabled(available.isEmpty)
+                }
+                ForEach(settings.preferredMicrophones) { microphone in
+                    let connected = audioEngine.connectedPreferredMicrophone(microphone) != nil
+                    SettingsRowDivider()
+                    SettingsRow(microphone.name, description: connected ? nil : "Disconnected") {
+                        microphoneOrderControls(microphone)
+                    }
+                }
+            }
+        }
+    }
+
+    private func microphoneOrderControls(_ microphone: PreferredMicrophone) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                movePreferredMicrophone(microphone, by: -1)
+            } label: {
+                Label("Move \(microphone.name) up", systemImage: "chevron.up").labelStyle(.iconOnly)
+            }
+            .disabled(settings.preferredMicrophones.first == microphone)
+            Button {
+                movePreferredMicrophone(microphone, by: 1)
+            } label: {
+                Label("Move \(microphone.name) down", systemImage: "chevron.down").labelStyle(.iconOnly)
+            }
+            .disabled(settings.preferredMicrophones.last == microphone)
+            Button {
+                audioEngine.setPreferredMicrophones(settings.preferredMicrophones.filter { $0 != microphone })
+            } label: {
+                Label("Remove \(microphone.name)", systemImage: "minus.circle").labelStyle(.iconOnly)
+            }
+        }
+        .controlSize(.small)
+    }
+
+    private func movePreferredMicrophone(_ microphone: PreferredMicrophone, by offset: Int) {
+        var microphones = settings.preferredMicrophones
+        guard let index = microphones.firstIndex(of: microphone), microphones.indices.contains(index + offset) else { return }
+        microphones.swapAt(index, index + offset)
+        audioEngine.setPreferredMicrophones(microphones)
+    }
+
     private var devicesSection: some View {
         SettingsSection("Devices") {
             SettingsRow(
-                "Lock Input Device",
-                description: "Prevent auto-switching when devices connect"
+                "Restore USB Outputs in Groups",
+                description: "Reconnect missing USB outputs in multi-output groups after a port or dock change."
             ) {
-                Toggle("", isOn: $settings.appSettings.lockInputDevice)
+                Toggle("Restore USB Outputs in Groups", isOn: $settings.appSettings.repairMultiOutputUSBConnections)
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .labelsHidden()

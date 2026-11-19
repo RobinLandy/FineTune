@@ -2,12 +2,50 @@
 
 import Testing
 import AudioToolbox
+import Foundation
 @testable import FineTune
 
 @Suite("MenuBarDeviceIconResolver")
 struct MenuBarDeviceIconResolverTests {
     private func device(id: AudioDeviceID, uid: String, name: String) -> AudioDevice {
         AudioDevice(id: id, uid: uid, name: name, icon: nil, supportsAutoEQ: true)
+    }
+
+    @Test("The menu bar pair follows each system default independently")
+    @MainActor
+    func devicePairFollowsDefaults() {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let settings = SettingsManager(directory: directory)
+        settings.appSettings.menuBarIconStyle = .device
+        let devices = MockAudioDeviceMonitor()
+        let speakers = device(id: 1001, uid: "speakers", name: "Speakers")
+        let headphones = device(id: 1002, uid: "headphones", name: "Headphones")
+        let webcam = device(id: 1003, uid: "webcam", name: "Webcam")
+        let microphone = device(id: 1004, uid: "microphone", name: "External microphone")
+        devices.addOutputDevice(speakers)
+        devices.addOutputDevice(headphones)
+        devices.addInputDevice(webcam)
+        devices.addInputDevice(microphone)
+        settings.setDeviceIconOverride(for: speakers.uid, to: "hifispeaker.2")
+        settings.setDeviceIconOverride(for: headphones.uid, to: "headphones")
+        settings.setDeviceIconOverride(for: webcam.uid, to: "web.camera.fill")
+        settings.setDeviceIconOverride(for: microphone.uid, to: "mic.fill")
+        settings.setDevicePriorityOrder([speakers.uid, headphones.uid])
+        let volumeMonitor = MockDeviceVolumeProviding(deviceMonitor: devices)
+        let coordinator = MenuBarIconCoordinator(deviceVolumeMonitor: volumeMonitor, deviceProvider: devices, settings: settings)
+
+        volumeMonitor.setDefaultDevice(speakers.id)
+        volumeMonitor.setDefaultInputDevice(webcam.id)
+        #expect(coordinator.baselineState() == .device(output: "hifispeaker.2", input: "web.camera.fill"))
+
+        volumeMonitor.setDefaultInputDevice(microphone.id)
+        #expect(coordinator.baselineState() == .device(output: "hifispeaker.2", input: "mic.fill"))
+
+        volumeMonitor.setDefaultDevice(headphones.id)
+        #expect(coordinator.baselineState() == .device(output: "headphones", input: "mic.fill"))
+
+        volumeMonitor.defaultInputDeviceUID = nil
+        #expect(coordinator.baselineState() == .device(output: "headphones", input: "mic"))
     }
 
     private func resolve(

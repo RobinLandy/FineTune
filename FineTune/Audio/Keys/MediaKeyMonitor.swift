@@ -221,8 +221,40 @@ final class MediaKeyMonitor {
 
     // MARK: - Event handling
 
-    /// Applies a decoded `MediaKeyEvent` to the default output device.
+    /// Applies a decoded media key to the selected master or device volume control.
     func handle(_ event: MediaKeyEvent, shiftHeld: Bool = false, optionHeld: Bool = false) {
+        if settingsManager.appSettings.masterVolumeEnabled {
+            if case .muteToggle = event {
+                audioEngine.toggleMasterMute()
+                if !popupVisibility.isVisible {
+                    hudController.show(
+                        sliderFraction: VolumeMapping.gainToSlider(audioEngine.masterVolume),
+                        mute: audioEngine.isMasterMuted,
+                        deviceName: "Master Volume"
+                    )
+                }
+                iconCoordinator?.flashDevice()
+                return
+            }
+            handleCore(
+                event: event,
+                deviceID: .unknown,
+                tier: .software,
+                deviceName: "Master Volume",
+                currentVolume: audioEngine.masterVolume,
+                currentMute: audioEngine.isMasterMuted,
+                setVolume: { _, gain in self.audioEngine.setMasterVolume(gain) },
+                // The master level setter commits gain and mute together for volume steps.
+                setMute: { _, _ in },
+                playFeedback: { gain in
+                    self.feedbackPlayer?.requestFeedback(
+                        gain: gain, shiftHeld: shiftHeld, optionHeld: optionHeld
+                    )
+                }
+            )
+            return
+        }
+
         let volumeMonitor = audioEngine.deviceVolumeMonitor
         let deviceID = volumeMonitor.defaultDeviceID
         guard deviceID.isValid else {
@@ -247,6 +279,32 @@ final class MediaKeyMonitor {
                     optionHeld: optionHeld
                 )
             }
+        )
+    }
+
+    /// The interactive HUD must write to the same control as the media keys.
+    func writeHUDVolume(_ sliderFraction: Double) {
+        if settingsManager.appSettings.masterVolumeEnabled {
+            audioEngine.setMasterVolume(VolumeMapping.sliderToGain(sliderFraction))
+            feedbackPlayer?.requestFeedback(
+                gain: VolumeFeedback.gain(tier: .software, sliderFraction: sliderFraction)
+            )
+            return
+        }
+
+        let volumeMonitor = audioEngine.deviceVolumeMonitor
+        let deviceID = volumeMonitor.defaultDeviceID
+        guard deviceID.isValid else { return }
+        let tier = volumeMonitor.outputVolumeBackend(for: deviceID)
+        let currentMute = volumeMonitor.muteStates[deviceID] ?? false
+        let willBeSilent = sliderFraction <= 0.001
+        if currentMute != willBeSilent {
+            volumeMonitor.setMute(for: deviceID, to: willBeSilent)
+        }
+        let gain = VolumeMapping.systemGain(forSliderFraction: sliderFraction, tier: tier)
+        volumeMonitor.setVolume(for: deviceID, to: gain)
+        feedbackPlayer?.requestFeedback(
+            gain: VolumeFeedback.gain(tier: tier, sliderFraction: sliderFraction)
         )
     }
 
@@ -381,22 +439,24 @@ final class MediaKeyMonitor {
         // Subtype 8 is the media-key channel; aux-button / brightness are pass-through.
         guard nsEvent.subtype.rawValue == 8 else { return false }
         let data1 = nsEvent.data1
-        guard let mediaEvent = decoder.decode(data1: data1) else { return false }
-
-        hudController.swallowObserved()
-        handle(
-            mediaEvent,
-            shiftHeld: cgEvent.flags.contains(.maskShift),
-            optionHeld: cgEvent.flags.contains(.maskAlternate)
-        )
+        guard IOKitMediaKeyDecoder.isVolumeKey(data1: data1) else { return false }
+        if let mediaEvent = decoder.decode(data1: data1) {
+            let shiftHeld = cgEvent.flags.contains(.maskShift)
+            let optionHeld = cgEvent.flags.contains(.maskAlternate)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.settingsManager.appSettings.mediaKeyControlEnabled else { return }
+                self.hudController.swallowObserved()
+                self.handle(mediaEvent, shiftHeld: shiftHeld, optionHeld: optionHeld)
+            }
+        }
         return true
     }
 }
 
 // MARK: - CGEventTap C callback
 
-// Tap installs on `CFRunLoopGetMain()` so this runs on main; `assumeIsolated`
-// preserves ordering against the next event (a Task-hop would reorder).
+// The callback decides whether to consume the event on the tap's main run loop.
+// Volume and HUD work is queued after the callback returns.
 private let mediaKeyTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
     guard let userInfo = userInfo else {
         return Unmanaged.passUnretained(event)

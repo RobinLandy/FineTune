@@ -226,6 +226,17 @@ struct AppSettingsDefaultTests {
         #expect(settings.defaultNewAppVolume == 1.0)
         #expect(settings.lockInputDevice == true)
         #expect(settings.showDeviceDisconnectAlerts == true)
+        #expect(!settings.showsCombinedDeviceLists)
+    }
+
+    @Test("The combined popup preference persists and older settings retain the tabbed layout")
+    func combinedPopupPersistence() throws {
+        let oldSettings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(!oldSettings.showsCombinedDeviceLists)
+        var settings = oldSettings
+        settings.showsCombinedDeviceLists = true
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+        #expect(decoded.showsCombinedDeviceLists)
     }
 
     @Test("loudnessEqualizationEnabled defaults to false")

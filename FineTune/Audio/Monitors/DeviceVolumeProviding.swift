@@ -10,6 +10,7 @@ enum VolumeControlTier: String, Codable, Equatable {
 protocol DeviceVolumeProviding: AnyObject {
     var defaultDeviceID: AudioDeviceID { get }
     var defaultDeviceUID: String? { get }
+    var defaultInputDeviceID: AudioDeviceID { get }
     var defaultInputDeviceUID: String? { get }
     var volumes: [AudioDeviceID: Float] { get }
     var muteStates: [AudioDeviceID: Bool] { get }

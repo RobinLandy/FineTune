@@ -122,9 +122,10 @@ struct MenuBarIconStateImageTests {
         #expect(MenuBarIconState.deviceFlash(symbol: "airpodsmax").image == .systemSymbol("airpodsmax"))
     }
 
-    @Test("device wraps an SF Symbol")
+    @Test("device keeps the output and input symbols in order")
     func deviceImage() {
-        #expect(MenuBarIconState.device(symbol: "airpodspro").image == .systemSymbol("airpodspro"))
+        let state = MenuBarIconState.device(output: "airpodspro", input: "mic.fill")
+        #expect(state.image == .devicePair(output: "airpodspro", input: "mic.fill"))
     }
 }
 
@@ -194,7 +195,7 @@ struct NonSpeakerBaselineTests {
 
     @Test(".device is supplied device symbol regardless of volume")
     func deviceSymbol() {
-        let expected = MenuBarIconState.device(symbol: "airpodspro")
+        let expected = MenuBarIconState.device(output: "airpodspro", input: "mic")
         for v in [Float(0.0), 0.5, 1.0] {
             #expect(MenuBarIconState.baseline(style: .device, volume: v, muted: false, deviceSymbol: "airpodspro") == expected, "volume=\(v)")
         }
@@ -202,7 +203,7 @@ struct NonSpeakerBaselineTests {
 
     @Test(".device ignores mute")
     func deviceIgnoresMute() {
-        let expected = MenuBarIconState.device(symbol: "homepod")
+        let expected = MenuBarIconState.device(output: "homepod", input: "mic")
         #expect(MenuBarIconState.baseline(style: .device, volume: 0.5, muted: true, deviceSymbol: "homepod") == expected)
     }
 
@@ -249,6 +250,6 @@ struct StyleIconNameConsistencyTests {
     @Test(".device baseline defaults to MenuBarIconStyle.device.iconName when no symbol supplied")
     func deviceMatchesDefaultIconName() {
         let baseline = MenuBarIconState.baseline(style: .device, volume: 0.5, muted: false)
-        #expect(baseline.image == .systemSymbol(MenuBarIconStyle.device.iconName))
+        #expect(baseline.image == .devicePair(output: MenuBarIconStyle.device.iconName, input: "mic"))
     }
 }

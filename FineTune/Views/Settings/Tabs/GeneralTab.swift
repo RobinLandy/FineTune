@@ -71,7 +71,7 @@ struct GeneralTab: View {
         SettingsSection("Menu Bar") {
             SettingsRow(
                 "Icon Style",
-                description: "How FineTune appears in your menu bar"
+                description: "The headphones and microphone option shows your active output and input."
             ) {
                 IconStyleSegmentedControl(selection: $settings.appSettings.menuBarIconStyle)
             }
@@ -81,6 +81,16 @@ struct GeneralTab: View {
                 description: "Smaller fits more on screen; larger leaves more breathing room."
             ) {
                 PopupSizeTilePicker(selection: $settings.appSettings.popupSize)
+            }
+            SettingsRowDivider()
+            SettingsRow(
+                "Show Input and Output Together",
+                description: "List speakers and microphones in the same popup."
+            ) {
+                Toggle("Show Input and Output Together", isOn: $settings.appSettings.showsCombinedDeviceLists)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
             }
         }
     }

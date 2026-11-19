@@ -127,8 +127,19 @@ final class MockAudioDeviceMonitor: AudioDeviceProviding {
         devicesByID[device.id] = device
     }
 
+    func removeOutputDevice(_ device: AudioDevice) {
+        outputDevices.removeAll { $0.id == device.id }
+        devicesByUID.removeValue(forKey: device.uid)
+        devicesByID.removeValue(forKey: device.id)
+    }
+
+    func addInputDevice(_ device: AudioDevice) {
+        inputDevices.append(device)
+        devicesByID[device.id] = device
+    }
+
     func device(for uid: String) -> AudioDevice? { devicesByUID[uid] }
-    func inputDevice(for uid: String) -> AudioDevice? { devicesByUID[uid] }
+    func inputDevice(for uid: String) -> AudioDevice? { inputDevices.first { $0.uid == uid } }
     func device(for id: AudioDeviceID) -> AudioDevice? { devicesByID[id] }
 
     func start() {}
@@ -142,6 +153,9 @@ final class MockDeviceVolumeProviding: DeviceVolumeProviding {
     var defaultDeviceID: AudioDeviceID = 0
     var defaultDeviceUID: String?
     var defaultInputDeviceUID: String?
+    var defaultInputDeviceID: AudioDeviceID {
+        defaultInputDeviceUID.flatMap { deviceMonitor.inputDevice(for: $0)?.id } ?? .unknown
+    }
     var volumes: [AudioDeviceID: Float] = [:]
     var muteStates: [AudioDeviceID: Bool] = [:]
 
@@ -184,10 +198,19 @@ final class MockDeviceVolumeProviding: DeviceVolumeProviding {
     }
 
     @discardableResult
-    func setDefaultDevice(_ deviceID: AudioDeviceID) -> Bool { true }
+    func setDefaultDevice(_ deviceID: AudioDeviceID) -> Bool {
+        defaultDeviceID = deviceID
+        defaultDeviceUID = deviceMonitor.device(for: deviceID)?.uid
+        return true
+    }
 
+    private(set) var setDefaultInputCalls: [AudioDeviceID] = []
     @discardableResult
-    func setDefaultInputDevice(_ deviceID: AudioDeviceID) -> Bool { true }
+    func setDefaultInputDevice(_ deviceID: AudioDeviceID) -> Bool {
+        setDefaultInputCalls.append(deviceID)
+        defaultInputDeviceUID = deviceMonitor.device(for: deviceID)?.uid
+        return true
+    }
 
     func outputVolumeBackend(for deviceID: AudioDeviceID) -> VolumeControlTier {
         if let uid = deviceMonitor.device(for: deviceID)?.uid,

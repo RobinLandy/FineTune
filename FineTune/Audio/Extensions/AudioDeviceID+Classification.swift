@@ -22,6 +22,31 @@ nonisolated extension AudioDeviceID {
         readTransportType() == .virtual
     }
 
+    func aggregateComposition() -> [String: Any]? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioAggregateDevicePropertyComposition,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var value: Unmanaged<CFDictionary>?
+        var size = UInt32(MemoryLayout.size(ofValue: value))
+        guard AudioObjectGetPropertyData(self, &address, 0, nil, &size, &value) == noErr else { return nil }
+        return value?.takeRetainedValue() as? [String: Any]
+    }
+
+    func setAggregateComposition(_ composition: [String: Any]) -> OSStatus {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioAggregateDevicePropertyComposition,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let dictionary = composition as CFDictionary
+        var value = Unmanaged.passUnretained(dictionary)
+        return withExtendedLifetime(dictionary) {
+            AudioObjectSetPropertyData(self, &address, 0, nil, UInt32(MemoryLayout.size(ofValue: value)), &value)
+        }
+    }
+
     /// Returns the UIDs of an aggregate device's constituent hardware sub-devices,
     /// in the aggregate's channel order, or `nil` if this is not an aggregate.
     ///
@@ -173,7 +198,10 @@ extension AudioDeviceID {
     func suggestedInputIconSymbol() -> String {
         let name = (try? readDeviceName()) ?? ""
         let transport = readTransportType()
+        return Self.inputIconSymbol(forName: name, transport: transport)
+    }
 
+    static func inputIconSymbol(forName name: String, transport: TransportType) -> String {
         // iPhone (Continuity Camera)
         if name.contains("iPhone") { return "iphone" }
 
@@ -194,6 +222,13 @@ extension AudioDeviceID {
         // Display mic
         if name.contains("Studio Display") { return "display" }
         if name.contains("Pro Display XDR") { return "display" }
+
+        if name.localizedCaseInsensitiveContains("camera") || name.localizedCaseInsensitiveContains("insta360 link") {
+            return "web.camera.fill"
+        }
+        if name.localizedCaseInsensitiveContains("wireless mic") {
+            return "mic.fill"
+        }
 
         // Transport-based fallbacks
         switch transport {

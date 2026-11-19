@@ -32,6 +32,8 @@ nonisolated struct AppSettings: Codable, Equatable {
 
     // Input Device Lock
     var lockInputDevice: Bool = true          // Prevent auto-switching input device
+    var masterVolumeEnabled: Bool = false   // Opt-in shared volume for FineTune-managed audio
+    var repairMultiOutputUSBConnections = false
 
     // Notifications
     var showDeviceDisconnectAlerts: Bool = true
@@ -55,6 +57,7 @@ nonisolated struct AppSettings: Codable, Equatable {
 
     // Popup
     var popupSize: MenuBarPopupSize = .comfortable  // Overall menu bar popup size and density
+    var showsCombinedDeviceLists = false
 
     init() {}
 
@@ -69,6 +72,8 @@ nonisolated struct AppSettings: Codable, Equatable {
         menuBarIconStyle = try c.decodeIfPresent(MenuBarIconStyle.self, forKey: .menuBarIconStyle) ?? .default
         defaultNewAppVolume = try c.decodeIfPresent(Float.self, forKey: .defaultNewAppVolume) ?? 1.0
         lockInputDevice = try c.decodeIfPresent(Bool.self, forKey: .lockInputDevice) ?? true
+        masterVolumeEnabled = try c.decodeIfPresent(Bool.self, forKey: .masterVolumeEnabled) ?? false
+        repairMultiOutputUSBConnections = try c.decodeIfPresent(Bool.self, forKey: .repairMultiOutputUSBConnections) ?? false
         showDeviceDisconnectAlerts = try c.decodeIfPresent(Bool.self, forKey: .showDeviceDisconnectAlerts) ?? true
         loudnessCompensationEnabled = try c.decodeIfPresent(Bool.self, forKey: .loudnessCompensationEnabled) ?? false
         loudnessEqualizationEnabled = try c.decodeIfPresent(Bool.self, forKey: .loudnessEqualizationEnabled) ?? false
@@ -78,16 +83,29 @@ nonisolated struct AppSettings: Codable, Equatable {
         customShortcuts = try c.decodeIfPresent([String: ShortcutCodable].self, forKey: .customShortcuts) ?? [:]
         appearance = try c.decodeIfPresent(AppearancePreference.self, forKey: .appearance) ?? .system
         popupSize = try c.decodeIfPresent(MenuBarPopupSize.self, forKey: .popupSize) ?? .comfortable
+        showsCombinedDeviceLists = try c.decodeIfPresent(Bool.self, forKey: .showsCombinedDeviceLists) ?? false
     }
 }
 
 // MARK: - Settings Manager
+
+struct PreferredMicrophone: Codable, Equatable, Identifiable {
+    let uid: String
+    let name: String
+
+    var id: String { uid }
+
+    var usbLocationIndependentUID: String? {
+        USBAudioDeviceUID.locationIndependentUID(for: uid)
+    }
+}
 
 @Observable
 @MainActor
 final class SettingsManager {
     private var settings: Settings
     private var saveTask: Task<Void, Never>?
+    private let saveQueue = DispatchQueue(label: "FineTune.Settings", qos: .utility)
     private let settingsURL: URL
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "SettingsManager")
 
@@ -96,6 +114,8 @@ final class SettingsManager {
         var appVolumes: [String: Float] = [:]
         var appDeviceRouting: [String: String] = [:]  // bundleID → deviceUID
         var appMutes: [String: Bool] = [:]  // bundleID → isMuted
+        var masterVolume: Float = 1.0
+        var masterMuted: Bool = false
         var appBoosts: [String: Float] = [:]  // bundleID → boost rawValue (1.0, 2.0, 3.0, 4.0)
         var appEQSettings: [String: EQSettings] = [:]  // bundleID → EQ settings
         var appSettings: AppSettings = AppSettings()  // App-wide settings
@@ -104,6 +124,7 @@ final class SettingsManager {
         var appSelectedDeviceUIDs: [String: [String]] = [:]  // bundleID → array of device UIDs for multi mode
         var lockedInputDeviceUID: String? = nil  // Current locked input device (updated on fallback)
         var preferredInputDeviceUID: String? = nil  // User's intended input device (survives disconnect)
+        var preferredMicrophones: [PreferredMicrophone] = []
         var pinnedApps: Set<String> = []  // Persistence identifiers of pinned apps
         var pinnedAppInfo: [String: PinnedAppInfo] = [:]  // Persistence identifier → app metadata
         var ignoredApps: Set<String> = []  // Persistence identifiers of hidden apps
@@ -151,6 +172,9 @@ final class SettingsManager {
                 .mapValues { min($0, 1.0) }  // Clamp old volumes > 1.0 (boost is now per-app)
             appDeviceRouting = try c.decodeIfPresent([String: String].self, forKey: .appDeviceRouting) ?? [:]
             appMutes = try c.decodeIfPresent([String: Bool].self, forKey: .appMutes) ?? [:]
+            let savedMaster = try c.decodeIfPresent(Float.self, forKey: .masterVolume) ?? 1.0
+            masterVolume = savedMaster.isFinite ? max(0, min(1, savedMaster)) : 1.0
+            masterMuted = try c.decodeIfPresent(Bool.self, forKey: .masterMuted) ?? false
             appBoosts = try c.decodeIfPresent([String: Float].self, forKey: .appBoosts) ?? [:]
             appEQSettings = try c.decodeIfPresent([String: EQSettings].self, forKey: .appEQSettings) ?? [:]
             var decodedAppSettings = try c.decodeIfPresent(AppSettings.self, forKey: .appSettings) ?? AppSettings()
@@ -164,6 +188,7 @@ final class SettingsManager {
             appSelectedDeviceUIDs = try c.decodeIfPresent([String: [String]].self, forKey: .appSelectedDeviceUIDs) ?? [:]
             lockedInputDeviceUID = try c.decodeIfPresent(String.self, forKey: .lockedInputDeviceUID)
             preferredInputDeviceUID = try c.decodeIfPresent(String.self, forKey: .preferredInputDeviceUID)
+            preferredMicrophones = try c.decodeIfPresent([PreferredMicrophone].self, forKey: .preferredMicrophones) ?? []
             pinnedApps = try c.decodeIfPresent(Set<String>.self, forKey: .pinnedApps) ?? []
             pinnedAppInfo = try c.decodeIfPresent([String: PinnedAppInfo].self, forKey: .pinnedAppInfo) ?? [:]
             ignoredApps = try c.decodeIfPresent(Set<String>.self, forKey: .ignoredApps) ?? []
@@ -196,6 +221,19 @@ final class SettingsManager {
         self.settingsURL = baseDir.appendingPathComponent("settings.json")
         self.settings = Settings()
         loadFromDisk()
+    }
+
+    // Shared master gain is independent of individual app and hardware-device levels.
+    var masterVolume: Float { settings.masterVolume }
+    var masterMuted: Bool { settings.masterMuted }
+
+    func setMasterVolume(_ gain: Float, muted: Bool) {
+        guard gain.isFinite else { return }
+        let clamped = max(0, min(1, gain))
+        guard settings.masterVolume != clamped || settings.masterMuted != muted else { return }
+        settings.masterVolume = clamped
+        settings.masterMuted = muted
+        scheduleSave()
     }
 
     func getVolume(for identifier: String) -> Float? {
@@ -310,6 +348,16 @@ final class SettingsManager {
 
     func setPreferredInputDeviceUID(_ uid: String?) {
         settings.preferredInputDeviceUID = uid
+        scheduleSave()
+    }
+
+    var preferredMicrophones: [PreferredMicrophone] {
+        settings.preferredMicrophones
+    }
+
+    func setPreferredMicrophones(_ microphones: [PreferredMicrophone]) {
+        guard settings.preferredMicrophones != microphones else { return }
+        settings.preferredMicrophones = microphones
         scheduleSave()
     }
 
@@ -844,6 +892,7 @@ final class SettingsManager {
         settings.systemSoundsFollowsDefault = true
         settings.lockedInputDeviceUID = nil
         settings.preferredInputDeviceUID = nil
+        settings.preferredMicrophones.removeAll()
         settings.ddcVolumes.removeAll()
         settings.ddcMuteStates.removeAll()
         settings.ddcSavedVolumes.removeAll()
@@ -897,7 +946,7 @@ final class SettingsManager {
             let url = settingsURL
             let data = try? JSONEncoder().encode(snapshot)
             guard let data else { return }
-            Task.detached(priority: .utility) {
+            saveQueue.async {
                 do {
                     try Self.writeData(data, to: url)
                 } catch {
@@ -919,7 +968,10 @@ final class SettingsManager {
     private func writeToDisk() {
         do {
             let data = try JSONEncoder().encode(settings)
-            try Self.writeData(data, to: settingsURL)
+            let url = settingsURL
+            try saveQueue.sync {
+                try Self.writeData(data, to: url)
+            }
 
             logger.debug("Saved settings")
         } catch {

@@ -51,6 +51,8 @@ final class RecordingProcessTapController: ProcessTapControlling {
 
     // Mutable surface — recorded as plain property writes (not events).
     var volume: Float = 1.0
+    var masterGain: Float = 1.0
+    private(set) var masterGainAtActivation: Float?
     var isMuted: Bool = false
     var currentDeviceVolume: Float = 1.0
     var isDeviceMuted: Bool = false
@@ -58,6 +60,7 @@ final class RecordingProcessTapController: ProcessTapControlling {
     private(set) var currentDeviceUIDs: [String]
     var currentDeviceUID: String? { currentDeviceUIDs.first }
     var tapSourceDeviceUID: String? = nil
+    private(set) var includedProcessIDs: [AudioObjectID] = []
 
     init(app: AudioApp, deviceUIDs: [String]) {
         self.app = app
@@ -65,6 +68,7 @@ final class RecordingProcessTapController: ProcessTapControlling {
     }
 
     func activate(initial: TapInitialState) throws {
+        masterGainAtActivation = masterGain
         events.append(.activate(TapInitialStateSnapshot(initial)))
     }
 
@@ -94,6 +98,7 @@ final class RecordingProcessTapController: ProcessTapControlling {
 
     func switchDevice(to newDeviceUID: String, preferredTapSourceDeviceUID: String?, sourceDeviceDead: Bool) async throws {
         currentDeviceUIDs = [newDeviceUID]
+        tapSourceDeviceUID = preferredTapSourceDeviceUID
     }
 
     func updateDevices(to newDeviceUIDs: [String], preferredTapSourceDeviceUID: String?, sourceDeviceDead: Bool) async throws {
@@ -103,7 +108,10 @@ final class RecordingProcessTapController: ProcessTapControlling {
     func hasRecentAudioCallback(within seconds: Double) -> Bool { false }
     func isHealthCheckEligible(minActiveSeconds: Double) -> Bool { false }
 
-    func refreshTapSource(_ preferredDeviceUID: String?) async throws {}
+    func includeAudioProcesses(_ processIDs: [AudioObjectID]) {
+        includedProcessIDs = processIDs
+    }
+
 }
 
 // MARK: - Process monitor stub
@@ -126,13 +134,15 @@ private struct Fixture {
     let deviceVolume: MockDeviceVolumeProviding
     let app: AudioApp
     let device: AudioDevice
+    let processMonitor: StubProcessMonitor
     let lastTap: () -> RecordingProcessTapController?
 }
 
 @MainActor
 private func makeFixture(
     supportsAutoEQ: Bool = true,
-    deviceVolume: Float = 0.75
+    deviceVolume: Float = 0.75,
+    isMultiOutputGroup: @escaping (AudioDeviceID) -> Bool = { _ in false }
 ) -> Fixture {
     let tempDir = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString)
@@ -179,11 +189,13 @@ private func makeFixture(
         deviceProvider: deviceMonitor,
         processMonitor: processMonitor,
         deviceVolumeMonitor: mockVolume,
-        tapFactory: { app, uids, _ in
+        tapFactory: { app, uids, source in
             let tap = RecordingProcessTapController(app: app, deviceUIDs: uids)
+            tap.tapSourceDeviceUID = source
             box.last = tap
             return tap
         },
+        isMultiOutputGroup: isMultiOutputGroup,
         startMonitorsAutomatically: false
     )
 
@@ -194,6 +206,7 @@ private func makeFixture(
         deviceVolume: mockVolume,
         app: app,
         device: device,
+        processMonitor: processMonitor,
         lastTap: { box.last }
     )
 }
@@ -208,6 +221,46 @@ private final class TapBox {
 @Suite("AudioEngine.tapInitialState — first-sound fix (PR-1)")
 @MainActor
 struct AudioEngineTapInitialStateTests {
+
+    @Test("Existing taps receive new audio clients without dropping their volume state")
+    func newAudioClientsUpdateExistingTap() throws {
+        let fix = makeFixture()
+        fix.deviceVolume.setDefaultDevice(fix.device.id)
+        fix.engine.setMasterVolumeEnabled(true)
+        fix.engine.setMasterVolume(0.36)
+        fix.engine.setDevice(for: fix.app, deviceUID: nil)
+        let tap = try #require(fix.lastTap())
+        let updated = AudioApp(id: fix.app.id, processObjectIDs: [41, 42], name: fix.app.name,
+                               icon: fix.app.icon, bundleID: fix.app.bundleID)
+        fix.processMonitor.activeApps = [updated]
+        fix.processMonitor.onAppsChanged?([updated])
+        #expect(fix.lastTap() === tap)
+        #expect(tap.includedProcessIDs == [41, 42])
+        #expect(tap.masterGain == 0.36)
+        #expect(!tap.events.contains(.invalidate))
+    }
+
+    @Test("A running app follows a multi-output group using mixdown even while absent from the process snapshot")
+    func switchRunningAppToMultiOutput() async throws {
+        let group = AudioDevice(id: 100, uid: "group", name: "Multi-Output", icon: nil, supportsAutoEQ: false)
+        let fix = makeFixture(isMultiOutputGroup: { $0 == group.id })
+        fix.deviceMonitor.addOutputDevice(group)
+        fix.deviceVolume.setDefaultDevice(fix.device.id)
+        fix.engine.setDevice(for: fix.app, deviceUID: nil)
+        let tap = try #require(fix.lastTap())
+        #expect(tap.tapSourceDeviceUID == fix.device.uid)
+
+        fix.processMonitor.activeApps = []
+        #expect(fix.engine.setDefaultOutputDevice(group.id))
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(1)
+        while tap.currentDeviceUID != group.uid && clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(tap.currentDeviceUID == group.uid)
+        #expect(tap.tapSourceDeviceUID == nil)
+        #expect(fix.lastTap() === tap)
+    }
 
     // MARK: Single-knob derivation
 
