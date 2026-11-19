@@ -439,22 +439,24 @@ final class MediaKeyMonitor {
         // Subtype 8 is the media-key channel; aux-button / brightness are pass-through.
         guard nsEvent.subtype.rawValue == 8 else { return false }
         let data1 = nsEvent.data1
-        guard let mediaEvent = decoder.decode(data1: data1) else { return false }
-
-        hudController.swallowObserved()
-        handle(
-            mediaEvent,
-            shiftHeld: cgEvent.flags.contains(.maskShift),
-            optionHeld: cgEvent.flags.contains(.maskAlternate)
-        )
+        guard IOKitMediaKeyDecoder.isVolumeKey(data1: data1) else { return false }
+        if let mediaEvent = decoder.decode(data1: data1) {
+            let shiftHeld = cgEvent.flags.contains(.maskShift)
+            let optionHeld = cgEvent.flags.contains(.maskAlternate)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.settingsManager.appSettings.mediaKeyControlEnabled else { return }
+                self.hudController.swallowObserved()
+                self.handle(mediaEvent, shiftHeld: shiftHeld, optionHeld: optionHeld)
+            }
+        }
         return true
     }
 }
 
 // MARK: - CGEventTap C callback
 
-// Tap installs on `CFRunLoopGetMain()` so this runs on main; `assumeIsolated`
-// preserves ordering against the next event (a Task-hop would reorder).
+// The callback decides whether to consume the event on the tap's main run loop.
+// Volume and HUD work is queued after the callback returns.
 private let mediaKeyTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
     guard let userInfo = userInfo else {
         return Unmanaged.passUnretained(event)

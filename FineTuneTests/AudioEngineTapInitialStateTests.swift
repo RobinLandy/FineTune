@@ -60,6 +60,7 @@ final class RecordingProcessTapController: ProcessTapControlling {
     private(set) var currentDeviceUIDs: [String]
     var currentDeviceUID: String? { currentDeviceUIDs.first }
     var tapSourceDeviceUID: String? = nil
+    private(set) var includedProcessIDs: [AudioObjectID] = []
 
     init(app: AudioApp, deviceUIDs: [String]) {
         self.app = app
@@ -106,6 +107,10 @@ final class RecordingProcessTapController: ProcessTapControlling {
 
     func hasRecentAudioCallback(within seconds: Double) -> Bool { false }
     func isHealthCheckEligible(minActiveSeconds: Double) -> Bool { false }
+
+    func includeAudioProcesses(_ processIDs: [AudioObjectID]) {
+        includedProcessIDs = processIDs
+    }
 
 }
 
@@ -216,6 +221,24 @@ private final class TapBox {
 @Suite("AudioEngine.tapInitialState — first-sound fix (PR-1)")
 @MainActor
 struct AudioEngineTapInitialStateTests {
+
+    @Test("Existing taps receive new audio clients without dropping their volume state")
+    func newAudioClientsUpdateExistingTap() throws {
+        let fix = makeFixture()
+        fix.deviceVolume.setDefaultDevice(fix.device.id)
+        fix.engine.setMasterVolumeEnabled(true)
+        fix.engine.setMasterVolume(0.36)
+        fix.engine.setDevice(for: fix.app, deviceUID: nil)
+        let tap = try #require(fix.lastTap())
+        let updated = AudioApp(id: fix.app.id, processObjectIDs: [41, 42], name: fix.app.name,
+                               icon: fix.app.icon, bundleID: fix.app.bundleID)
+        fix.processMonitor.activeApps = [updated]
+        fix.processMonitor.onAppsChanged?([updated])
+        #expect(fix.lastTap() === tap)
+        #expect(tap.includedProcessIDs == [41, 42])
+        #expect(tap.masterGain == 0.36)
+        #expect(!tap.events.contains(.invalidate))
+    }
 
     @Test("A running app follows a multi-output group using mixdown even while absent from the process snapshot")
     func switchRunningAppToMultiOutput() async throws {

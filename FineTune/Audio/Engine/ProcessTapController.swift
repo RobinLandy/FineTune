@@ -25,6 +25,7 @@ import Synchronization
 @MainActor
 final class ProcessTapController: ProcessTapControlling {
     let app: AudioApp
+    private var audioProcessIDs: [AudioObjectID]
     private let logger: Logger
     // HAL dispatches synchronously to this queue. Treat the block as real-time code.
     private let queue = DispatchQueue(label: "ProcessTapController", qos: .userInitiated)
@@ -228,6 +229,7 @@ final class ProcessTapController: ProcessTapControlling {
     ) {
         precondition(!targetDeviceUIDs.isEmpty, "Must have at least one target device")
         self.app = app
+        self.audioProcessIDs = app.processObjectIDs
         self.targetDeviceUIDs = targetDeviceUIDs
         self.deviceMonitor = deviceMonitor
         self.preferredTapSourceDeviceUID = preferredTapSourceDeviceUID
@@ -545,7 +547,7 @@ final class ProcessTapController: ProcessTapControlling {
 
         if let deviceUID = preferredDeviceUID {
             if let outputStream = outputStreamIndex(for: deviceUID) {
-                let streamTap = CATapDescription(processes: app.processObjectIDs, deviceUID: deviceUID, stream: outputStream)
+                let streamTap = CATapDescription(processes: audioProcessIDs, deviceUID: deviceUID, stream: outputStream)
                 streamTap.uuid = UUID()
                 streamTap.muteBehavior = .mutedWhenTapped
                 streamTap.isPrivate = true
@@ -565,7 +567,7 @@ final class ProcessTapController: ProcessTapControlling {
             }
         }
 
-        let mixdownTap = CATapDescription(stereoMixdownOfProcesses: app.processObjectIDs)
+        let mixdownTap = CATapDescription(stereoMixdownOfProcesses: audioProcessIDs)
         mixdownTap.uuid = UUID()
         mixdownTap.muteBehavior = .mutedWhenTapped
         mixdownTap.isPrivate = true
@@ -587,6 +589,31 @@ final class ProcessTapController: ProcessTapControlling {
         }
         maybeLogEQBypass(for: mixdownTapID)
         return (mixdownTap, mixdownTapID)
+    }
+
+    func includeAudioProcesses(_ processIDs: [AudioObjectID]) {
+        let incoming = Set(processIDs)
+        if !incoming.isSubset(of: Set(audioProcessIDs)) {
+            let stillPresent = audioProcessIDs.filter { (try? $0.readProcessPID()) != nil }
+            audioProcessIDs = incoming.union(stillPresent).sorted()
+        }
+        for resources in [primaryResources, secondaryResources] {
+            guard resources.tapID.isValid, let description = resources.tapDescription,
+                  description.processes != audioProcessIDs else { continue }
+            let previous = description.processes
+            description.processes = audioProcessIDs
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioTapPropertyDescription,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var value = Unmanaged.passUnretained(description)
+            let status = AudioObjectSetPropertyData(resources.tapID, &address, 0, nil, UInt32(MemoryLayout.size(ofValue: value)), &value)
+            if status != noErr {
+                description.processes = previous
+                logger.error("Could not update audio processes for \(self.app.name): \(status)")
+            }
+        }
     }
 
     func activate(initial: TapInitialState) throws {

@@ -1,3 +1,5 @@
+import AudioToolbox
+
 /// Abstraction over process tap controllers for testability.
 ///
 /// **Threading:** The protocol surface is `@MainActor` — AudioEngine and tests
@@ -30,10 +32,13 @@ protocol ProcessTapControlling: AnyObject, Sendable {
     func isHealthCheckEligible(minActiveSeconds: Double) -> Bool
 
     var tapSourceDeviceUID: String? { get }
+    func includeAudioProcesses(_ processIDs: [AudioObjectID])
     func recreateForOutputConfigurationChange() async throws
 }
 
 extension ProcessTapControlling {
+    func includeAudioProcesses(_ processIDs: [AudioObjectID]) {}
+
     /// Convenience activation with default state. Production callers must pass an
     /// `initial:` populated from persisted settings — defaults leave the first audio
     /// callbacks running with no EQ/AutoEQ/Loudness and unity volume ramp.

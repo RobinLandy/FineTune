@@ -14,6 +14,13 @@ protocol MediaKeyEventDecoding: Sendable {
 /// Decodes `NSSystemDefined.data1` using `<IOKit/hidsystem/ev_keymap.h>`
 /// constants: NX_KEYTYPE_SOUND_UP=0, SOUND_DOWN=1, MUTE=7. Unknown subtypes → nil.
 struct IOKitMediaKeyDecoder: MediaKeyEventDecoding {
+    static func isVolumeKey(data1: Int) -> Bool {
+        switch (data1 & 0xFFFF0000) >> 16 {
+        case 0, 1, 7: return true
+        default: return false
+        }
+    }
+
     func decode(data1: Int) -> MediaKeyEvent? {
         let keyType = Int32((data1 & 0xFFFF0000) >> 16)
         let keyFlags = Int32(data1 & 0xFFFF)

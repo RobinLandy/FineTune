@@ -360,8 +360,14 @@ final class AudioEngine {
         }
 
         processMonitor.onAppsChanged = { [weak self] apps in
-            self?.applyPersistedSettings()
-            self?.scheduleStaleCleanup()
+            guard let self else { return }
+            for app in apps {
+                if let tap = self.taps[app.id], tap.app.persistenceIdentifier == app.persistenceIdentifier {
+                    tap.includeAudioProcesses(app.processObjectIDs)
+                }
+            }
+            self.applyPersistedSettings()
+            self.scheduleStaleCleanup()
         }
 
         // Priority order closures — only for concrete AudioDeviceMonitor

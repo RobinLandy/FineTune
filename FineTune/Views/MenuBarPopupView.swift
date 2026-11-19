@@ -349,8 +349,6 @@ struct MenuBarPopupView: View {
     @ViewBuilder
     private func mainContent(scrollProxy: ScrollViewProxy) -> some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-            devicesSection
-
             if audioEngine.settingsManager.appSettings.masterVolumeEnabled &&
                (showsCombinedDeviceLists || !showingInputDevices) && !isEditingDevicePriority {
                 HStack(spacing: DesignTokens.Spacing.sm) {
@@ -367,9 +365,14 @@ struct MenuBarPopupView: View {
                         set: { audioEngine.setMasterVolume(VolumeMapping.sliderToGain($0)) }
                     ), in: 0...1)
                     .accessibilityLabel("Master Volume")
+                    Text(VolumeMapping.gainToSlider(audioEngine.masterVolume).formatted(.percent.precision(.fractionLength(0))))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 4)
             }
+
+            devicesSection
 
             Divider()
                 .padding(.vertical, DesignTokens.Spacing.xs)
