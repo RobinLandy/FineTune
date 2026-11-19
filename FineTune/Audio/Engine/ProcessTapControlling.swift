@@ -30,7 +30,7 @@ protocol ProcessTapControlling: AnyObject, Sendable {
     func isHealthCheckEligible(minActiveSeconds: Double) -> Bool
 
     var tapSourceDeviceUID: String? { get }
-    func recreateForOutputRateChange() async throws
+    func recreateForOutputConfigurationChange() async throws
 }
 
 extension ProcessTapControlling {
@@ -55,7 +55,7 @@ extension ProcessTapControlling {
         invalidate()
     }
 
-    func recreateForOutputRateChange() async throws {
+    func recreateForOutputConfigurationChange() async throws {
         // Default no-op for mocks that don't override
     }
 }

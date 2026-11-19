@@ -33,6 +33,7 @@ nonisolated struct AppSettings: Codable, Equatable {
     // Input Device Lock
     var lockInputDevice: Bool = true          // Prevent auto-switching input device
     var masterVolumeEnabled: Bool = false   // Opt-in shared volume for FineTune-managed audio
+    var repairMultiOutputUSBConnections = false
 
     // Notifications
     var showDeviceDisconnectAlerts: Bool = true
@@ -72,6 +73,7 @@ nonisolated struct AppSettings: Codable, Equatable {
         defaultNewAppVolume = try c.decodeIfPresent(Float.self, forKey: .defaultNewAppVolume) ?? 1.0
         lockInputDevice = try c.decodeIfPresent(Bool.self, forKey: .lockInputDevice) ?? true
         masterVolumeEnabled = try c.decodeIfPresent(Bool.self, forKey: .masterVolumeEnabled) ?? false
+        repairMultiOutputUSBConnections = try c.decodeIfPresent(Bool.self, forKey: .repairMultiOutputUSBConnections) ?? false
         showDeviceDisconnectAlerts = try c.decodeIfPresent(Bool.self, forKey: .showDeviceDisconnectAlerts) ?? true
         loudnessCompensationEnabled = try c.decodeIfPresent(Bool.self, forKey: .loudnessCompensationEnabled) ?? false
         loudnessEqualizationEnabled = try c.decodeIfPresent(Bool.self, forKey: .loudnessEqualizationEnabled) ?? false
@@ -94,15 +96,7 @@ struct PreferredMicrophone: Codable, Equatable, Identifiable {
     var id: String { uid }
 
     var usbLocationIndependentUID: String? {
-        Self.usbLocationIndependentUID(for: uid)
-    }
-
-    static func usbLocationIndependentUID(for uid: String) -> String? {
-        let parts = uid.split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count >= 5, parts.first == "AppleUSBAudioEngine" else { return nil }
-        let location = parts[parts.count - 2]
-        guard location.utf8.count == 8, location.hasSuffix("0000"), UInt32(location, radix: 16) != nil else { return nil }
-        return parts.dropLast(2).joined(separator: ":") + ":" + parts[parts.count - 1]
+        USBAudioDeviceUID.locationIndependentUID(for: uid)
     }
 }
 

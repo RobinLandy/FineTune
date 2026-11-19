@@ -22,6 +22,31 @@ nonisolated extension AudioDeviceID {
         readTransportType() == .virtual
     }
 
+    func aggregateComposition() -> [String: Any]? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioAggregateDevicePropertyComposition,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var value: Unmanaged<CFDictionary>?
+        var size = UInt32(MemoryLayout.size(ofValue: value))
+        guard AudioObjectGetPropertyData(self, &address, 0, nil, &size, &value) == noErr else { return nil }
+        return value?.takeRetainedValue() as? [String: Any]
+    }
+
+    func setAggregateComposition(_ composition: [String: Any]) -> OSStatus {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioAggregateDevicePropertyComposition,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let dictionary = composition as CFDictionary
+        var value = Unmanaged.passUnretained(dictionary)
+        return withExtendedLifetime(dictionary) {
+            AudioObjectSetPropertyData(self, &address, 0, nil, UInt32(MemoryLayout.size(ofValue: value)), &value)
+        }
+    }
+
     /// Returns the UIDs of an aggregate device's constituent hardware sub-devices,
     /// in the aggregate's channel order, or `nil` if this is not an aggregate.
     ///

@@ -218,6 +218,12 @@ struct FineTuneApp: App {
         // Pass engine to AppDelegate
         _appDelegate.wrappedValue.audioEngine = engine
 
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak engine] _ in
+            MainActor.assumeIsolated { engine?.resumeAudioDeviceRecovery() }
+        }
+
         if permission.status == .unknown {
             permission.request()
         }

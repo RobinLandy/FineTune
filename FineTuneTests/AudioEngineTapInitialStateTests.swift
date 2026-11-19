@@ -97,6 +97,7 @@ final class RecordingProcessTapController: ProcessTapControlling {
 
     func switchDevice(to newDeviceUID: String, preferredTapSourceDeviceUID: String?, sourceDeviceDead: Bool) async throws {
         currentDeviceUIDs = [newDeviceUID]
+        tapSourceDeviceUID = preferredTapSourceDeviceUID
     }
 
     func updateDevices(to newDeviceUIDs: [String], preferredTapSourceDeviceUID: String?, sourceDeviceDead: Bool) async throws {
@@ -128,13 +129,15 @@ private struct Fixture {
     let deviceVolume: MockDeviceVolumeProviding
     let app: AudioApp
     let device: AudioDevice
+    let processMonitor: StubProcessMonitor
     let lastTap: () -> RecordingProcessTapController?
 }
 
 @MainActor
 private func makeFixture(
     supportsAutoEQ: Bool = true,
-    deviceVolume: Float = 0.75
+    deviceVolume: Float = 0.75,
+    isMultiOutputGroup: @escaping (AudioDeviceID) -> Bool = { _ in false }
 ) -> Fixture {
     let tempDir = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString)
@@ -181,11 +184,13 @@ private func makeFixture(
         deviceProvider: deviceMonitor,
         processMonitor: processMonitor,
         deviceVolumeMonitor: mockVolume,
-        tapFactory: { app, uids, _ in
+        tapFactory: { app, uids, source in
             let tap = RecordingProcessTapController(app: app, deviceUIDs: uids)
+            tap.tapSourceDeviceUID = source
             box.last = tap
             return tap
         },
+        isMultiOutputGroup: isMultiOutputGroup,
         startMonitorsAutomatically: false
     )
 
@@ -196,6 +201,7 @@ private func makeFixture(
         deviceVolume: mockVolume,
         app: app,
         device: device,
+        processMonitor: processMonitor,
         lastTap: { box.last }
     )
 }
@@ -210,6 +216,28 @@ private final class TapBox {
 @Suite("AudioEngine.tapInitialState — first-sound fix (PR-1)")
 @MainActor
 struct AudioEngineTapInitialStateTests {
+
+    @Test("A running app follows a multi-output group using mixdown even while absent from the process snapshot")
+    func switchRunningAppToMultiOutput() async throws {
+        let group = AudioDevice(id: 100, uid: "group", name: "Multi-Output", icon: nil, supportsAutoEQ: false)
+        let fix = makeFixture(isMultiOutputGroup: { $0 == group.id })
+        fix.deviceMonitor.addOutputDevice(group)
+        fix.deviceVolume.setDefaultDevice(fix.device.id)
+        fix.engine.setDevice(for: fix.app, deviceUID: nil)
+        let tap = try #require(fix.lastTap())
+        #expect(tap.tapSourceDeviceUID == fix.device.uid)
+
+        fix.processMonitor.activeApps = []
+        #expect(fix.engine.setDefaultOutputDevice(group.id))
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(1)
+        while tap.currentDeviceUID != group.uid && clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(tap.currentDeviceUID == group.uid)
+        #expect(tap.tapSourceDeviceUID == nil)
+        #expect(fix.lastTap() === tap)
+    }
 
     // MARK: Single-knob derivation
 

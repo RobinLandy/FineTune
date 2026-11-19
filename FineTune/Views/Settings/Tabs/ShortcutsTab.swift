@@ -22,6 +22,7 @@ struct ShortcutsTab: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.never)
+        .onAppear { accessibility.refresh() }
         .onChange(of: settings.appSettings.mediaKeyControlEnabled) { _, _ in
             mediaKeyMonitor.reconcile()
         }
@@ -61,14 +62,14 @@ struct ShortcutsTab: View {
                     .labelsHidden()
             }
 
-            if !accessibility.isTrustedCached {
+            if settings.appSettings.mediaKeyControlEnabled && !accessibility.isTrustedCached {
                 SettingsRowDivider()
                 AccessibilityPromptStrip(accessibility: accessibility)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
             }
 
-            if mediaKeyStatus.isOffline {
+            if settings.appSettings.mediaKeyControlEnabled && accessibility.isTrustedCached && mediaKeyStatus.isOffline {
                 SettingsRowDivider()
                 MediaKeyOfflineCard {
                     mediaKeyMonitor.reconcile()

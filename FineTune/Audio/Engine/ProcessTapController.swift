@@ -428,14 +428,8 @@ final class ProcessTapController: ProcessTapControlling {
         return deviceID.isVirtualDevice()
     }
 
-    /// Recreates the aggregate at the device's new rate on a Bluetooth A2DP↔SCO change. Recreation is
-    /// the only reliable way to re-rate the IOProc — in-place nominal-rate or buffer-size writes
-    /// silence a running aggregate's IOProc, which can't be reconfigured live. Routed through the
-    /// destructive switch with `sourceAlreadySilent: true` so the old aggregate is force-silenced
-    /// first (cutting the rate-mismatched garbage) before the rebuild, then volume ramps back up — a
-    /// brief clean dip rather than a crackle. The switch can't be fully gapless: the BT link itself
-    /// renegotiates across the profile change.
-    func recreateForOutputRateChange() async throws {
+    /// Rebuilds the aggregate and IOProc after an output rate or membership change.
+    func recreateForOutputConfigurationChange() async throws {
         let originalDevices = currentDeviceUIDs
         // Let an in-flight route change finish. This rate notification may be for
         // the output that is about to be replaced.
@@ -446,7 +440,7 @@ final class ProcessTapController: ProcessTapControlling {
         }
         try await runDeviceSwitch {
             guard self.activated, !originalDevices.isEmpty, self.currentDeviceUIDs == originalDevices else { return }
-            self.logger.info("[RATE] \(self.app.name): recreating aggregate at new rate")
+            self.logger.info("\(self.app.name): recreating aggregate after output configuration change")
             try await self.performDestructiveDeviceSwitch(to: self.currentDeviceUIDs, sourceAlreadySilent: true)
         }
     }

@@ -41,6 +41,9 @@ struct AudioTab: View {
                 audioEngine.handleInputLockEnabled()
             }
         }
+        .onChange(of: settings.appSettings.repairMultiOutputUSBConnections) { _, enabled in
+            if enabled { audioEngine.repairMultiOutputConnections() }
+        }
         .onChange(of: settings.appSettings.loudnessCompensationEnabled) { _, newValue in
             audioEngine.setLoudnessCompensationEnabled(newValue)
         }
@@ -166,6 +169,16 @@ struct AudioTab: View {
 
     private var devicesSection: some View {
         SettingsSection("Devices") {
+            SettingsRow(
+                "Restore USB Outputs in Groups",
+                description: "Reconnect missing USB outputs in multi-output groups after a port or dock change."
+            ) {
+                Toggle("Restore USB Outputs in Groups", isOn: $settings.appSettings.repairMultiOutputUSBConnections)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+            }
+            SettingsRowDivider()
             SettingsRow(
                 "System Sounds",
                 description: "Where alerts and effects play"

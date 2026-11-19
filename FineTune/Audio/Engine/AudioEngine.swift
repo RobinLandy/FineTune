@@ -29,6 +29,7 @@ final class AudioEngine {
     /// Closure to check if a device is alive. Overridable for testing.
     private let isAliveCheck: (AudioDeviceID) -> Bool
     private let inputTransport: (AudioDeviceID) -> TransportType
+    private let isMultiOutputGroup: (AudioDeviceID) -> Bool
     private var manualInputOverrideUID: String?
 
     /// One-shot HAL listeners for devices that were present but not alive during priority resolution.
@@ -44,6 +45,7 @@ final class AudioEngine {
     /// The last output default confirmed by FineTune (user change or programmatic switch).
     /// Used to restore after macOS auto-switches to a lower-priority device.
     private var lastConfirmedDefaultUID: String?
+    private var multiOutputRecoveryTask: Task<Void, Never>?
     /// Timestamp of the last auto-switch override. Used to distinguish rapid BT auto-switches
     /// (< 1s apart) from deliberate user changes (> 1s after last override).
     private var lastAutoSwitchOverrideTime: Date?
@@ -183,6 +185,7 @@ final class AudioEngine {
         tapFactory: (@MainActor (AudioApp, [String], String?) throws -> any ProcessTapControlling)? = nil,
         isAlive: ((AudioDeviceID) -> Bool)? = nil,
         inputTransport: @escaping (AudioDeviceID) -> TransportType = { $0.readTransportType() },
+        isMultiOutputGroup: @escaping (AudioDeviceID) -> Bool = { ($0.aggregateSubDeviceUIDs()?.count ?? 0) > 1 },
         startMonitorsAutomatically: Bool = true
     ) {
         self.permission = permission
@@ -193,6 +196,7 @@ final class AudioEngine {
         self.volumeState = VolumeState(settingsManager: manager)
         self.isAliveCheck = isAlive ?? { $0.isDeviceAlive() }
         self.inputTransport = inputTransport
+        self.isMultiOutputGroup = isMultiOutputGroup
 
         // If a custom deviceProvider is given, use it directly.
         // Otherwise create a real AudioDeviceMonitor (needed by DeviceVolumeMonitor and default tap factory).
@@ -284,6 +288,7 @@ final class AudioEngine {
                 // Start device volume monitor AFTER deviceMonitor.start() populates devices
                 self.deviceVolumeMonitor.start()
 
+                self.repairMultiOutputConnections()
                 self.applyPersistedSettings()
                 self.registerNewDevicesInPriority()
                 // Seed the confirmed default from whatever macOS has at startup
@@ -377,6 +382,7 @@ final class AudioEngine {
         deviceMonitor.onDeviceDisconnected = { [weak self] deviceUID, deviceName in
             self?.handleDeviceDisconnected(deviceUID, name: deviceName)
             self?.bluetoothDeviceMonitor.refresh()
+            self?.scheduleMultiOutputRecovery()
         }
 
         deviceMonitor.onDeviceConnected = { [weak self] deviceUID, deviceName in
@@ -575,6 +581,7 @@ final class AudioEngine {
             processMonitor.start()
         }
         deviceMonitor.start()
+        repairMultiOutputConnections()
         applyPersistedSettings()
         if permission.status == .authorized {
             startHealthMonitor()
@@ -590,6 +597,8 @@ final class AudioEngine {
 
     func stop() {
         stopHealthMonitor()
+        multiOutputRecoveryTask?.cancel()
+        multiOutputRecoveryTask = nil
         if case .pendingAutoSwitch(_, let task) = inputPriorityState {
             task.cancel()
             inputPriorityState = .stable
@@ -933,6 +942,9 @@ final class AudioEngine {
     /// UI code should call this instead of `deviceVolumeMonitor.setDefaultDevice` directly.
     @discardableResult
     func setDefaultOutputDevice(_ deviceID: AudioDeviceID) -> Bool {
+        if settingsManager.appSettings.repairMultiOutputUSBConnections && deviceID.isAggregateDevice() {
+            repairMultiOutputConnections()
+        }
         guard deviceVolumeMonitor.setDefaultDevice(deviceID) else { return false }
         if let uid = deviceMonitor.outputDevices.first(where: { $0.id == deviceID })?.uid {
             outputEchoTracker.increment(uid)
@@ -1350,17 +1362,19 @@ final class AudioEngine {
         }
 
         var tapsToSwitch: [(app: AudioApp, tap: any ProcessTapControlling)] = []
-        for app in apps {
-            guard followsDefault.contains(app.id), let tap = taps[app.id] else { continue }
-            tapsToSwitch.append((app, tap))
+        for (pid, tap) in taps where followsDefault.contains(pid) {
+            tapsToSwitch.append((tap.app, tap))
         }
         guard !tapsToSwitch.isEmpty else { return }
 
         Task {
             for (app, tap) in tapsToSwitch {
+                guard self.followsDefault.contains(app.id), self.appDeviceRouting[app.id] == targetUID,
+                      self.taps[app.id] === tap else { continue }
                 do {
                     let preferredTapSourceUID = self.preferredTapSourceDeviceUID(forOutputUIDs: [targetUID], isFollowsDefault: true)
                     try await tap.switchDevice(to: targetUID, preferredTapSourceDeviceUID: preferredTapSourceUID)
+                    guard self.appDeviceRouting[app.id] == targetUID, self.taps[app.id] === tap else { continue }
                     self.applyTapOutputState(to: tap, for: app.id, deviceUIDs: [targetUID])
                     self.applyAutoEQToTap(tap)
                 } catch {
@@ -1479,6 +1493,7 @@ final class AudioEngine {
 
     /// Called when a device appears - switches pinned apps back to their preferred device
     private func handleDeviceConnected(_ deviceUID: String, name deviceName: String) {
+        scheduleMultiOutputRecovery()
         // Register newly connected device in priority list
         settingsManager.ensureDeviceInPriority(deviceUID)
 
@@ -1610,6 +1625,41 @@ final class AudioEngine {
             timeoutTask: timeoutTask
         )
         logger.debug("Entered PENDING_AUTOSWITCH for \(deviceName) (\(timeout)s grace)")
+    }
+
+    private func scheduleMultiOutputRecovery() {
+        guard settingsManager.appSettings.repairMultiOutputUSBConnections else { return }
+        multiOutputRecoveryTask?.cancel()
+        multiOutputRecoveryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            self?.repairMultiOutputConnections()
+        }
+    }
+
+    func resumeAudioDeviceRecovery() {
+        scheduleMultiOutputRecovery()
+    }
+
+    func repairMultiOutputConnections() {
+        guard settingsManager.appSettings.repairMultiOutputUSBConnections else { return }
+        let repaired = MultiOutputUSBRecovery.repairGroups()
+        guard !repaired.isEmpty else { return }
+
+        let affected = taps.filter { repaired.contains($0.value.tapSourceDeviceUID ?? "") ||
+            $0.value.currentDeviceUIDs.contains(where: repaired.contains) }
+        guard !affected.isEmpty else { return }
+        Task { @MainActor [weak self] in
+            for (pid, tap) in affected {
+                guard let self, self.taps[pid] === tap else { continue }
+                do {
+                    try await tap.recreateForOutputConfigurationChange()
+                } catch {
+                    self.logger.error("Could not rebuild tap after USB output recovery: \(error.localizedDescription)")
+                    if self.taps[pid] === tap { await self.recreateTap(for: pid) }
+                }
+            }
+        }
     }
 
     // MARK: - Alive Watchers
@@ -1830,13 +1880,12 @@ final class AudioEngine {
     }
 
     /// Returns the preferred tap source device UID for stream-specific capture.
-    /// Only follows-default apps use stream-specific taps (multichannel preserved, tap always
-    /// valid because the app switches device when default changes). Explicitly-routed apps
-    /// always use stereo mixdown (nil) — their tap never goes stale when the default changes.
+    /// Use a single device's stream for follows-default apps. Multi-output groups use stereo mixdown.
     private func preferredTapSourceDeviceUID(forOutputUIDs outputUIDs: [String], isFollowsDefault: Bool) -> String? {
-        guard isFollowsDefault else { return nil }
-        guard let defaultUID = deviceVolumeMonitor.defaultDeviceUID else { return nil }
-        return outputUIDs.contains(defaultUID) ? defaultUID : nil
+        guard isFollowsDefault, outputUIDs.count == 1,
+              let uid = outputUIDs.first, uid == deviceVolumeMonitor.defaultDeviceUID,
+              let device = deviceMonitor.device(for: uid), !isMultiOutputGroup(device.id) else { return nil }
+        return uid
     }
 
     private func cleanupStaleTaps() {
@@ -2027,7 +2076,7 @@ final class AudioEngine {
         for (pid, tap) in affected {
             do {
                 logger.info("[RATE] Recreating tap for PID \(pid)")
-                try await tap.recreateForOutputRateChange()
+                try await tap.recreateForOutputConfigurationChange()
             } catch {
                 logger.error("[RATE] Recreate failed for PID \(pid): \(error.localizedDescription) — falling back to full recreate")
                 await recreateTap(for: pid)
@@ -2147,7 +2196,7 @@ final class AudioEngine {
               }) else { return nil }
 
         let matches = inputDevices.filter {
-            $0.uid != excludedUID && PreferredMicrophone.usbLocationIndependentUID(for: $0.uid) == identity
+            $0.uid != excludedUID && USBAudioDeviceUID.locationIndependentUID(for: $0.uid) == identity
         }
         guard matches.count == 1, let device = matches.first, isAliveCheck(device.id) else { return nil }
         return device
